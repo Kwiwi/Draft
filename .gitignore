@@ -16,3 +16,9 @@ www/
 dist/
 *.apk
 *.aab
+
+# Signing material (never commit)
+.signing/
+*.keystore
+*.jks
+*.p12

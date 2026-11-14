@@ -1,0 +1,33 @@
+// Applied by CI after `npx cap add android` so every debug APK shares one signature.
+def storePath = System.getenv("DRAFT_DEBUG_KEYSTORE_PATH") ?: "ci-debug.keystore"
+def storePass = System.getenv("DRAFT_DEBUG_STORE_PASSWORD")
+def keyAlias = System.getenv("DRAFT_DEBUG_KEY_ALIAS")
+def keyPass = System.getenv("DRAFT_DEBUG_KEY_PASSWORD")
+
+if (!storePass || !keyAlias || !keyPass) {
+    throw new GradleException(
+        "Missing DRAFT_DEBUG_* signing env. Set GitHub Actions secrets " +
+        "(see scripts/generate-debug-keystore.sh)."
+    )
+}
+
+def ks = file(storePath)
+if (!ks.exists()) {
+    throw new GradleException("Keystore file not found: ${ks.absolutePath}")
+}
+
+android {
+    signingConfigs {
+        ciDebug {
+            storeFile ks
+            storePassword storePass
+            keyAlias keyAlias
+            keyPassword keyPass
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.ciDebug
+        }
+    }
+}

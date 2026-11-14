@@ -23,8 +23,51 @@ npx cap sync android
 cd android && ./gradlew assembleDebug
 ```
 
-Or push to `main` and download the **draft-debug-apk** artifact from the **Android APK** GitHub Action.
+Or push to `main` and download the **draft-debug-apk-rN** artifact from the **Android APK** GitHub Action
+(`Draft-debug-rN-<sha>.apk`).
 
+### Re-installing a new debug build
+
+- **“已下载过该软件，禁止覆盖”** (download blocked): phone already has the same download name.
+  Delete the old APK in Downloads, or use the new run-numbered filename from CI.
+- Same package id: `com.kwiwi.draft`.
+
+### Stable debug signing (update without uninstall)
+
+CI used to mint a **new debug key every run**, so Android blocked “update”. Fix: one long-lived
+debug keystore in **GitHub Actions secrets**.
+
+**One-time setup (on your machine):**
+
+```bash
+chmod +x scripts/generate-debug-keystore.sh
+./scripts/generate-debug-keystore.sh
+# Secrets text is written to .signing/github-secrets.txt (gitignored)
+```
+
+Then in GitHub → **Settings → Secrets and variables → Actions**, create:
+
+| Secret | Value |
+|--------|--------|
+| `DRAFT_DEBUG_KEYSTORE_BASE64` | base64 blob from the script output |
+| `DRAFT_DEBUG_STORE_PASSWORD` | from the script (default `draft-debug`) |
+| `DRAFT_DEBUG_KEY_ALIAS` | from the script (default `draft`) |
+| `DRAFT_DEBUG_KEY_PASSWORD` | from the script (same as store password by default) |
+
+With GitHub CLI:
+
+```bash
+gh secret set DRAFT_DEBUG_KEYSTORE_BASE64 < <(base64 -w0 .signing/draft-debug.keystore)
+gh secret set DRAFT_DEBUG_STORE_PASSWORD --body 'draft-debug'
+gh secret set DRAFT_DEBUG_KEY_ALIAS --body 'draft'
+gh secret set DRAFT_DEBUG_KEY_PASSWORD --body 'draft-debug'
+```
+
+**After secrets are set:** push → download new APK.
+
+- **First** time switching to this key: still **uninstall once** (old random CI signature ≠ new one).
+- **Later** builds with the same secrets: install over the top; no uninstall.
+- Never commit `.signing/` or `*.keystore`. This key is for **sideload/debug only**, not Play Store.
 ## Requirements (local Android build)
 
 - Node.js 22+
