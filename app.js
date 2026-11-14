@@ -1186,7 +1186,9 @@ function enterViewMode() {
   document.getElementById('viewer').classList.add('active');
 
   document.getElementById('viewerTitle').innerText = p.title;
-  document.getElementById('viewerContent').innerHTML = p.content;
+  const renderedViewer = getRenderedDraftHtml(p);
+  document.getElementById('viewerContent').innerHTML = renderedViewer.content;
+  renderMath(document.getElementById('viewerContent'));
   applyEditorFontSettings(p);
 
   syncTabs();
@@ -1442,96 +1444,177 @@ function wrapPdfText(context, text, maxWidth) {
   return lines;
 }
 
-function getProjectFontFamily(project) {
-  const settings = getFontSettings(project || {});
-  const fallbackStack = [...settings.stack, 'Noto Serif HK', 'Noto Serif SC', 'Cardo', 'serif'];
-  return [...new Set(fallbackStack)]
-    .map(name => `'${String(name).replace(/'/g, '')}'`)
-    .join(', ');
+
+async function fetchTextAsset(relativePath) {
+  const response = await fetch(new URL(relativePath, window.location.href));
+  if (!response.ok) throw new Error(`Failed to fetch ${relativePath}`);
+  return response.text();
 }
 
-async function exportPdf(project) {
-  if (!project) {
-    showAlert('alert-select-project');
-    return;
+async function fetchDataUrlAsset(relativePath) {
+  const response = await fetch(new URL(relativePath, window.location.href));
+  if (!response.ok) throw new Error(`Failed to fetch ${relativePath}`);
+  const blob = await response.blob();
+  return blobToDataUrl(blob);
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('data-url failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function fetchBase64Asset(relativePath) {
+  const response = await fetch(new URL(relativePath, window.location.href));
+  if (!response.ok) throw new Error(`Failed to fetch ${relativePath}`);
+  return arrayBufferToBase64(await response.arrayBuffer());
+}
+
+// Local font files usable inside the app. Large CJK files are skipped in
+// standalone export and replaced with system font fallbacks so shared HTML
+// stays openable outside Capacitor.
+const EXPORT_FONT_FILES = {
+  'Cardo': [{ path: 'fonts/Cardo-Regular.ttf', weight: '400 700', style: 'normal', maxBytes: 2_000_000 }],
+  'Source Serif 4': [
+    { path: 'fonts/SourceSerif4-Regular.ttf', weight: '400', style: 'normal', maxBytes: 2_000_000 },
+    { path: 'fonts/SourceSerif4-Bold.ttf', weight: '700', style: 'normal', maxBytes: 2_000_000 },
+    { path: 'fonts/SourceSerif4-Italic.ttf', weight: '400', style: 'italic', maxBytes: 2_000_000 },
+    { path: 'fonts/SourceSerif4-BoldItalic.ttf', weight: '700', style: 'italic', maxBytes: 2_000_000 }
+  ],
+  'Lora': null,
+  'Merriweather': null,
+  'Open Sans': null,
+  'Roboto': null,
+  // CJK full fonts are huge; do not embed by default.
+  'Noto Serif HK': null,
+  'Noto Serif SC': null
+};
+
+const EXPORT_SYSTEM_FONT_FALLBACKS = {
+  'Noto Serif HK': ["'Noto Serif CJK HK'", "'Noto Serif CJK TC'", "'Source Han Serif HK'", "'Source Han Serif TC'", 'serif'],
+  'Noto Serif SC': ["'Noto Serif CJK SC'", "'Source Han Serif SC'", "'Songti SC'", "'SimSun'", 'serif'],
+  'Cardo': ["'Cardo'", 'Georgia', 'serif'],
+  'Source Serif 4': ["'Source Serif 4'", 'Georgia', 'serif'],
+  'Lora': ["'Lora'", 'Georgia', 'serif'],
+  'Merriweather': ["'Merriweather'", 'Georgia', 'serif'],
+  'Open Sans': ["'Open Sans'", 'Arial', 'sans-serif'],
+  'Roboto': ["'Roboto'", 'Arial', 'sans-serif']
+};
+
+async function buildEmbeddedFontCss(project) {
+  const settings = getFontSettings(project || {});
+  const faces = [];
+  const familyNames = [];
+  const seen = new Set();
+
+  for (const name of [...settings.stack, 'Noto Serif HK', 'Noto Serif SC', 'Cardo']) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    familyNames.push(name);
+    const specs = EXPORT_FONT_FILES[name];
+    if (!specs) continue;
+    for (const spec of specs) {
+      try {
+        const response = await fetch(new URL(spec.path, window.location.href));
+        if (!response.ok) continue;
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength > (spec.maxBytes || 2_000_000)) continue;
+        const base64 = arrayBufferToBase64(buffer);
+        const format = spec.path.endsWith('.woff2') ? 'woff2' : spec.path.endsWith('.woff') ? 'woff' : 'truetype';
+        faces.push(`@font-face{font-family:'${String(name).replace(/'/g, '')}';font-style:${spec.style};font-weight:${spec.weight};font-display:swap;src:url(data:font/${format === 'truetype' ? 'ttf' : format};base64,${base64}) format('${format}');}`);
+      } catch (error) {
+        console.warn('embed font failed', name, error);
+      }
+    }
   }
 
-  // Capacitor WebView blocks window.open/print-based PDF flows.
-  // Use the in-app render preview, and on native also offer a shareable HTML file.
-  if (isNativeApp()) {
-    if (Draft.currentProjectId === project.id && Draft.mode === 'edit') {
-      persistEditorDraft();
-    }
-    Draft.currentProjectId = project.id;
-    if (renderPreviewWindow) {
-      renderDraftPreview(project);
-      renderPreviewWindow.classList.add('show');
-    }
-    const rendered = getRenderedDraftHtml(project);
-    const assetBase = new URL('.', window.location.href).href;
-    const html = `<!DOCTYPE html>
-<html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${rendered.title}</title>
-  <link rel="stylesheet" href="${assetBase}fonts/app-fonts.css">
-  <link rel="stylesheet" href="${assetBase}fonts/latin-fonts.css">
-  <link rel="stylesheet" href="${assetBase}vendor/katex/katex.min.css">
-  <style>
-    body { margin: 24px; color: #111; font-family: ${rendered.family}; }
-    h1 { margin: 0 0 24px; font-size: 2em; line-height: 1.2; }
-    .pdf-content { font-size: ${rendered.size}px; line-height: 1.6; overflow-wrap: anywhere; }
-    .pdf-content img { max-width: 100%; }
-  </style>
-</head>
-<body>
-  <h1>${rendered.title}</h1>
-  <div class="pdf-content">${rendered.content}</div>
-  <script src="${assetBase}vendor/katex/katex.min.js"><\/script>
-  <script src="${assetBase}vendor/katex/auto-render.min.js"><\/script>
-  <script>
-    if (typeof renderMathInElement === 'function') {
-      renderMathInElement(document.querySelector('.pdf-content'), {
-        throwOnError: false,
-        delimiters: [
-          { left: '$$', right: '$$', display: true },
-          { left: '\\[', right: '\\]', display: true },
-          { left: '\\(', right: '\\)', display: false },
-          { left: '$', right: '$', display: false }
-        ]
-      });
-    }
-  <\/script>
-</body>
-</html>`;
-    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
-    return;
-  }
+  const family = familyNames
+    .flatMap(name => EXPORT_SYSTEM_FONT_FALLBACKS[name] || [`'${String(name).replace(/'/g, '')}'`])
+    .concat(['serif'])
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+    .join(', ');
 
-  const preview = window.open('', '_blank', 'width=900,height=1000');
-  if (!preview) {
-    showAlert('export-popup-blocked');
-    return;
-  }
+  return { css: faces.join('\n'), family };
+}
 
+async function buildInlinedKatexCss() {
+  let css = await fetchTextAsset('vendor/katex/katex.min.css');
+  const urls = Array.from(css.matchAll(/url\((fonts\/[^)]+)\)/g)).map(match => match[1]);
+  const unique = [...new Set(urls)];
+  for (const rel of unique) {
+    try {
+      const dataUrl = await fetchDataUrlAsset(`vendor/katex/${rel}`);
+      css = css.split(`url(${rel})`).join(`url(${dataUrl})`);
+    } catch (error) {
+      console.warn('katex font embed failed', rel, error);
+    }
+  }
+  return css;
+}
+
+function buildRenderedExportDom(project) {
   const rendered = getRenderedDraftHtml(project);
-  const { title, content, family, size } = rendered;
-  const assetBase = new URL('.', window.location.href).href;
-  const fontLinkHtml = [
-    `<link rel="stylesheet" href="${assetBase}fonts/app-fonts.css">`,
-    `<link rel="stylesheet" href="${assetBase}fonts/latin-fonts.css">`
-  ].join('\n  ');
+  const host = document.createElement('div');
+  host.className = 'export-render-root';
+  host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
+  host.style.fontFamily = rendered.family;
+  host.style.fontSize = `${rendered.size}px`;
+  host.style.lineHeight = '1.6';
+  host.innerHTML = `<div class="export-body">${rendered.content}</div>`;
+  document.body.appendChild(host);
+  applyRelativeFontSizes(host, rendered.size);
+  renderMath(host);
+  const bodyHtml = host.querySelector('.export-body').innerHTML;
+  const plainText = (host.innerText || host.textContent || '').replace(/\u00a0/g, ' ').trim();
+  document.body.removeChild(host);
+  return {
+    title: rendered.title,
+    titleText: (project && project.title) || 'Untitled',
+    bodyHtml,
+    plainText,
+    family: rendered.family,
+    size: rendered.size
+  };
+}
 
-  preview.document.write(`<!DOCTYPE html>
+async function buildStandaloneExportHtml(project, options = {}) {
+  const snapshot = buildRenderedExportDom(project);
+  const { css: fontCss, family: embeddedFamily } = await buildEmbeddedFontCss(project);
+  const family = embeddedFamily || snapshot.family;
+  const katexCss = await buildInlinedKatexCss();
+  const printable = options.printable !== false;
+  const toolbar = printable ? `
+  <div class="preview-toolbar">
+    <button id="printButton" type="button">Print / Save as PDF</button>
+  </div>` : '';
+  const toolbarScript = printable ? `
+  <script>
+    var printButton = document.getElementById('printButton');
+    if (printButton) printButton.addEventListener('click', function () { window.print(); });
+  <\\/script>` : '';
+
+  return `<!DOCTYPE html>
 <html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} - PDF Preview</title>
-  ${fontLinkHtml}
-  <link rel="stylesheet" href="${assetBase}vendor/katex/katex.min.css">
+  <title>${snapshot.title}</title>
   <style>
+${fontCss}
+${katexCss}
     @page { size: A4; margin: 18mm 16mm; }
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
@@ -1560,7 +1643,6 @@ async function exportPdf(project) {
       font: inherit;
       cursor: pointer;
     }
-    .preview-toolbar button + button { background: #fff; color: #1F7FFF; }
     .pdf-page {
       max-width: 210mm;
       min-height: 297mm;
@@ -1575,17 +1657,18 @@ async function exportPdf(project) {
       line-height: 1.2;
       font-weight: 700;
       overflow-wrap: anywhere;
+      font-family: ${family};
     }
     .pdf-content {
       font-family: ${family};
-      font-size: ${size}px;
+      font-size: ${snapshot.size}px;
       line-height: 1.6;
       overflow-wrap: anywhere;
     }
     .pdf-content img { max-width: 100%; }
     @media print {
       body { background: #fff; }
-      .preview-toolbar { display: none; }
+      .preview-toolbar { display: none !important; }
       .pdf-page {
         max-width: none;
         min-height: 0;
@@ -1597,33 +1680,72 @@ async function exportPdf(project) {
   </style>
 </head>
 <body>
-  <div class="preview-toolbar">
-    <button id="printButton" type="button">Print / Save as PDF</button>
-    <button id="closeButton" type="button">Close</button>
-  </div>
+  ${toolbar}
   <main class="pdf-page">
-    <h1>${title}</h1>
-    <div class="pdf-content">${content}</div>
+    <h1>${snapshot.title}</h1>
+    <div class="pdf-content">${snapshot.bodyHtml}</div>
   </main>
-  <script src="${assetBase}vendor/katex/katex.min.js"><\/script>
-  <script src="${assetBase}vendor/katex/auto-render.min.js"><\/script>
-  <script>
-    document.getElementById('printButton').addEventListener('click', () => window.print());
-    document.getElementById('closeButton').addEventListener('click', () => window.close());
-    if (typeof renderMathInElement === 'function') {
-      renderMathInElement(document.querySelector('.pdf-content'), {
-        throwOnError: false,
-        delimiters: [
-          { left: '$$', right: '$$', display: true },
-          { left: '\\[', right: '\\]', display: true },
-          { left: '\\(', right: '\\)', display: false },
-          { left: '$', right: '$', display: false }
-        ]
-      });
-    }
-  <\/script>
+  ${toolbarScript}
 </body>
-</html>`);
+</html>`;
+}
+
+function projectRenderedPlainText(project) {
+  return buildRenderedExportDom(project).plainText;
+}
+
+function projectRenderedRtf(project) {
+  const snapshot = buildRenderedExportDom(project);
+  const fake = {
+    ...project,
+    content: snapshot.bodyHtml,
+    title: snapshot.titleText
+  };
+  return projectRtf(fake);
+}
+
+
+function getProjectFontFamily(project) {
+  const settings = getFontSettings(project || {});
+  const fallbackStack = [...settings.stack, 'Noto Serif HK', 'Noto Serif SC', 'Cardo', 'serif'];
+  return [...new Set(fallbackStack)]
+    .map(name => `'${String(name).replace(/'/g, '')}'`)
+    .join(', ');
+}
+
+async function exportPdf(project) {
+  if (!project) {
+    showAlert('alert-select-project');
+    return;
+  }
+
+  if (Draft.currentProjectId === project.id && Draft.mode === 'edit') {
+    persistEditorDraft();
+    project = getProject(project.id) || project;
+  }
+
+  // Always use the same rendered snapshot as Render Preview (markdown + math).
+  // Standalone HTML inlines fonts/KaTeX so shared files still look right outside the app.
+  const html = await buildStandaloneExportHtml(project, { printable: !isNativeApp() });
+
+  if (isNativeApp()) {
+    if (renderPreviewWindow) {
+      renderDraftPreview(project);
+      renderPreviewWindow.classList.add('show');
+    }
+    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
+    return;
+  }
+
+  const preview = window.open('', '_blank', 'width=900,height=1000');
+  if (!preview) {
+    // Fallback: download self-contained HTML if pop-up blocked.
+    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
+    showAlert('export-popup-blocked');
+    return;
+  }
+  preview.document.open();
+  preview.document.write(html);
   preview.document.close();
 }
 
@@ -1637,11 +1759,17 @@ async function exportProject(format, projectId = Draft.drawerProjectId || Draft.
 
   try {
     if (format === 'md') {
+      // Markdown export keeps the editable source (pre-render).
       await downloadExport(getExportFilename(project.title, 'md'), `\uFEFF${projectMarkdown(project)}`, 'text/markdown;charset=utf-8');
     } else if (format === 'rtf') {
-      await downloadExport(getExportFilename(project.title, 'rtf'), projectRtf(project), 'application/rtf');
+      // RTF/TXT/PDF all use the same Render Preview snapshot.
+      await downloadExport(getExportFilename(project.title, 'rtf'), projectRenderedRtf(project), 'application/rtf');
     } else if (format === 'txt') {
-      await downloadExport(getExportFilename(project.title, 'txt'), `${project.title || 'Untitled'}\n\n${projectPlainText(project)}`, 'text/plain;charset=utf-8');
+      await downloadExport(
+        getExportFilename(project.title, 'txt'),
+        `${project.title || 'Untitled'}\n\n${projectRenderedPlainText(project)}`,
+        'text/plain;charset=utf-8'
+      );
     } else if (format === 'pdf') {
       await exportPdf(project);
     }
