@@ -4,9 +4,15 @@
   "private": true,
   "description": "Draft hybrid Android app",
   "scripts": {
-    "build": "npm run native-bridge && mkdir -p www && cp index.html app.js i18n.js style.css www/ && rm -rf www/vendor www/fonts && cp -r vendor fonts www/",
-    "resources": "npx capacitor-assets generate --android --assetPath resources",
-    "native-bridge": "node scripts/build-native-bridge.js"
+    "native-bridge": "node scripts/build-native-bridge.js",
+    "build": "node scripts/build-targets.js local",
+    "build:local": "node scripts/build-targets.js local",
+    "build:cdn": "node scripts/build-targets.js cdn",
+    "build:web": "node scripts/build-targets.js web",
+    "build:all": "node scripts/build-targets.js local cdn web",
+    "sync:cdn": "bash scripts/sync-cdn-edition.sh",
+    "sync:web": "bash scripts/sync-web-edition.sh",
+    "resources": "npx capacitor-assets generate --android --assetPath resources"
   },
   "devDependencies": {
     "@capacitor/android": "^7.4.3",

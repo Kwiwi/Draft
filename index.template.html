@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>{{TITLE}}</title>
+  <meta name="theme-color" content="#ffffff">
+{{HEAD_MODE}}
+  <!-- Apply saved theme/lang before first paint to avoid day→night / EN→ZH flash. -->
+  <script>
+    (function () {
+      try {
+        var root = document.documentElement;
+        var dark = localStorage.getItem('theme') === 'dark';
+        if (dark) root.setAttribute('data-theme', 'dark');
+        else root.removeAttribute('data-theme');
+        var lang = localStorage.getItem('lang');
+        if (localStorage.getItem('lang-user-set') === '1' && (lang === 'zh' || lang === 'en')) {
+          root.lang = lang === 'zh' ? 'zh-CN' : 'en';
+          root.setAttribute('data-lang', lang);
+        }
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = dark ? '#111111' : '#ffffff';
+      } catch (e) {}
+      document.documentElement.classList.add('boot-pending');
+      // Safety: never leave UI hidden if a later script fails.
+      setTimeout(function () {
+        document.documentElement.classList.remove('boot-pending');
+      }, 2500);
+    })();
+  </script>
+{{HEAD_ASSETS}}
+</head>
+<body>
+
+  <!-- 1. 顶部栏 -->
+  <div class="top-bar">
+    <div class="lang-bar">
+      <button data-lang="zh">中文</button>
+      <button data-lang="en" class="active">EN</button>
+    </div>
+    <button class="theme-btn" id="themeToggle">🌙</button>
+  </div>
+
+  <!-- 2. 模式切换 -->
+  <div class="mode-bar">
+    <div class="mode-tab active" data-i18n="tab-home">HOME</div>
+    <div class="mode-tab" id="modeEditor" data-i18n="tab-editor">EDITOR</div>
+  </div>
+
+  <!-- 3. 内容分区 -->
+
+  <!-- 首页：项目列表 -->
+  <div class="section active" id="homeView">
+    <div class="label" data-i18n="label-home">Projects</div>
+    <button class="btn" onclick="createProject()" data-i18n="btn-new">+ Draft</button>
+
+    <div id="projectList"></div>
+  </div>
+
+  <!-- 只读预览视图 -->
+  <div class="section" id="viewer">
+    <div class="viewer-header">
+      <div class="label" id="viewerTitle">Untitled</div>
+      <button class="copy-btn" id="viewerCopyBtn" data-i18n="btn-copy">Copy</button>
+    </div>
+    <div id="viewerContent" class="box-large"></div>
+    <button class="btn" onclick="goHome()" data-i18n="btn-back">Back</button>
+  </div>
+
+  <!-- 编辑器视图 -->
+  <div class="section" id="editorView">
+    <div class="editor-page-top">
+      <button class="btn" onclick="goHome()" data-i18n="btn-back">Back</button>
+      <div class="editor-top-actions">
+        <button class="copy-btn" id="editorTopCopyBtn" data-i18n="btn-copy-all">Copy All</button>
+        <button class="copy-btn" id="annotationsBtn" data-i18n="btn-annotations">Annotations</button>
+      </div>
+    </div>
+    <div class="editor-settings-row">
+      <button class="editor-settings-btn" id="editorSettingsBtn" title="Settings">&#9881;</button>
+    </div>
+    <div class="editor-header">
+      <input id="titleInput" class="title-input" data-i18n="placeholder-title" placeholder="项目标题" />
+    </div>
+    <div id="editorMeta" class="editor-meta"></div>
+    <div id="editor"
+         contenteditable="true"
+         spellcheck="false"
+         class="box-large"></div>
+    <div id="selectionToolbar" class="selection-toolbar" aria-hidden="true">
+      <label class="selection-size-control">
+        <span data-i18n="selection-size-label">Size</span>
+        <select id="selectionSizeSelect" aria-label="Selection size">
+          <option value="0.8">80%</option>
+          <option value="1">100%</option>
+          <option value="1.2">120%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200%</option>
+          <option value="3">300%</option>
+        </select>
+      </label>
+      <label class="selection-color-control">
+        <span data-i18n="selection-color-label">Color</span>
+        <span class="selection-hex-prefix">#</span>
+        <input id="selectionColorInput" type="text" maxlength="6" data-i18n="selection-color-placeholder" placeholder="1F7FFF">
+      </label>
+      <button id="selectionColorApply" type="button" class="copy-btn" data-i18n="selection-apply">Apply</button>
+    </div>
+    <div class="editor-bottom-actions">
+      <button class="btn" onclick="goHome()" data-i18n="btn-back">Back</button>
+      <button class="copy-btn" id="editorBottomTopBtn" data-i18n="btn-back-to-top">Back to top</button>
+      <button class="copy-btn" id="editorCopyBtn" data-i18n="btn-copy-all">Copy All</button>
+    </div>
+  </div>
+
+  <!-- 注释工作区 -->
+  <div class="section" id="annotationView">
+    <div id="annotationWindow" class="annotation-window" inert>
+      <div id="annotationHeader" class="annotation-header">
+        <span data-i18n="annotations-title">Annotations</span>
+        <button id="annotationBackBtn" class="copy-btn" data-i18n="btn-close">Close</button>
+      </div>
+      <div id="annotationList" class="annotation-list"></div>
+      <div class="annotation-footer">
+        <button id="annotationAddBtn" class="btn annotation-add-btn" data-i18n="btn-add-annotation">+ Add annotation</button>
+        <div class="annotation-actions">
+          <button id="annotationCopyBtn" class="copy-btn" data-i18n="btn-copy-all">Copy All</button>
+          <button id="annotationGeminiBtn" class="copy-btn" data-i18n="btn-ask-gemini">Ask Gemini</button>
+          <button id="annotationChatgptBtn" class="copy-btn">Ask ChatGPT</button>
+          <button id="annotationTranslatorBtn" class="copy-btn">pm_translator</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 加载提示 -->
+  <div class="loading" data-i18n="loading-text">加载中...</div>
+
+  <!-- 自定义确认弹窗 -->
+  <div id="confirmModal" class="modal">
+    <div class="modal-box">
+      <p id="confirmText">确认删除？</p>
+      <div class="modal-btns">
+        <button id="confirmCancel" data-i18n="btn-cancel">取消</button>
+        <button id="confirmOk" data-i18n="btn-ok">确定</button>
+      </div>
+    </div>
+  </div>
+  <div id="pinModal" class="modal">
+    <div class="modal-box pin-box">
+      <p data-i18n="pin-title">Pin this draft?</p>
+      <label class="importance-label" for="pinImportance">
+        <span data-i18n="label-importance">Importance</span>
+        <button id="importanceHelp" class="help-btn" type="button">?</button>
+      </label>
+      <input id="pinImportance" class="importance-input" type="number" min="0" max="99" value="0">
+      <div id="importanceHint" class="importance-hint" data-i18n="importance-hint"></div>
+      <div class="modal-btns">
+        <button id="pinClose" data-i18n="btn-close">Close</button>
+        <button id="pinSave" data-i18n="btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
+  <div id="renameModal" class="modal">
+    <div class="modal-box rename-box">
+      <p data-i18n="rename-title">Rename draft</p>
+      <input id="renameInput" class="rename-input" type="text">
+      <div class="modal-btns">
+        <button id="renameCancel" data-i18n="btn-cancel">Cancel</button>
+        <button id="renameSave" data-i18n="btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
+  <!-- Alert 弹窗 -->
+  <div id="alertModal" class="modal">
+    <div class="modal-box alert-box">
+      <p id="alertText"></p>
+      <button id="alertOk" class="btn" data-i18n="btn-ok">OK</button>
+    </div>
+  </div>
+
+
+  <!-- 抽屉遮罩 -->
+  <div id="drawerOverlay" class="drawer-overlay"></div>
+
+  <!-- 抽屉面板 -->
+  <div id="projectDrawer" class="drawer">
+    <div class="drawer-header">
+      <span id="drawerTitle" data-i18n="drawer-title">Project Settings</span>
+      <button id="drawerClose" class="drawer-close">&times;</button>
+    </div>
+    <div class="drawer-body">
+      <div class="export-wrap drawer-export">
+        <button id="drawerExport" class="drawer-action" data-i18n="btn-export">Export</button>
+        <div id="exportOptions" class="export-options">
+          <button type="button" data-export-format="txt">.txt</button>
+          <button type="button" data-export-format="rtf">.rtf</button>
+          <button type="button" data-export-format="md">.md</button>
+          <button type="button" data-export-format="pdf">PDF</button>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-footer">
+      <button id="drawerRename" class="drawer-action" data-i18n="btn-rename">Rename</button>
+      <button id="drawerDelete" class="drawer-action danger" data-i18n="btn-delete">Delete</button>
+    </div>
+  </div>
+
+  <div id="editorSettingsOverlay" class="drawer-overlay"></div>
+  <div id="editorSettingsDrawer" class="drawer editor-settings-drawer">
+    <div class="drawer-header">
+      <span data-i18n="editor-settings-title">Settings</span>
+      <button id="editorSettingsClose" class="drawer-close">&times;</button>
+    </div>
+    <div class="drawer-body">
+      <label class="font-setting-label" data-i18n="font-family-label">Font fallback order</label>
+      <div class="font-add-row">
+        <input id="fontInput" class="font-input" type="text" data-i18n="font-placeholder" placeholder="Type a font name">
+        <select id="fontSelect" class="font-select">
+          <option value="Noto Serif HK">Noto Serif HK</option>
+          <option value="Cardo">Cardo</option>
+          <option value="Roboto">Roboto</option>
+          <option value="Open Sans">Open Sans</option>
+          <option value="Lora">Lora</option>
+          <option value="Merriweather">Merriweather</option>
+          <option value="Source Serif 4">Source Serif 4</option>
+          <option value="Noto Serif SC">Noto Serif SC</option>
+        </select>
+      </div>
+      <button id="fontAddBtn" class="drawer-action" data-i18n="font-add">Add font</button>
+      <div id="fontList" class="font-list"></div>
+      <label class="font-setting-label" for="fontSizeInput" data-i18n="font-size-label">Font size</label>
+      <div class="font-size-row">
+        <input id="fontSizeInput" type="number" min="8" max="12" step="1" value="10">
+        <span>px</span>
+      </div>
+      <input id="fontSizeRange" class="font-size-range" type="range" min="8" max="12" step="1" value="10">
+      <button id="renderPreviewBtn" class="drawer-action" data-i18n="btn-render-preview">Render preview</button>
+      <div class="settings-export-wrap export-wrap" data-export-source="current">
+        <label class="font-setting-label" data-i18n="settings-export-label">Export</label>
+        <button id="settingsExport" class="drawer-action" data-i18n="btn-export">Export</button>
+        <div id="settingsExportOptions" class="export-options">
+          <button type="button" data-export-format="txt">.txt</button>
+          <button type="button" data-export-format="rtf">.rtf</button>
+          <button type="button" data-export-format="md">.md</button>
+          <button type="button" data-export-format="pdf">PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toolFloatButton" class="tool-float-button" aria-label="Tools">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+      <rect width="24" height="24" fill="transparent"/>
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" fill="white" fill-opacity="0.3" stroke="white" stroke-opacity="0.3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <div id="toolPalette" class="tool-palette">
+    <button class="tool-btn" data-tool="top" title="Back to top">&#8593;</button>
+    <button class="tool-btn" data-tool="bottom" title="Back to bottom">&#8595;</button>
+    <button class="tool-btn tool-color-btn" data-tool="color" title="Button color">&#9679;</button>
+    <button class="tool-btn" data-tool="settings" title="Settings">&#9881;</button>
+    <button class="tool-btn tool-annotation-btn" data-tool="annotations" title="Annotations">&#9998;</button>
+    <button class="tool-btn tool-magnifier-btn" data-tool="magnifier" title="Magnifier">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+        <rect width="24" height="24" fill="transparent"/>
+        <circle cx="11" cy="11" r="7" stroke="black" stroke-width="1.8" fill="none"/>
+        <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="black" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button class="tool-btn" data-tool="theme" title="Toggle theme" id="toolThemeBtn">&#9788;</button>
+    <button class="tool-btn tool-external" data-tool="gemini">Ask Gemini</button>
+    <button class="tool-btn tool-external" data-tool="chatgpt">Ask ChatGPT</button>
+    <button class="tool-btn tool-external" data-tool="translator">pm_translator</button>
+  </div>
+  <div id="toolColorPanel" class="tool-color-panel">
+    <label for="toolColorInput">#</label>
+    <input id="toolColorInput" type="text" maxlength="6" placeholder="1F7FFF">
+    <button id="toolColorSave" type="button" data-i18n="btn-ok">OK</button>
+  </div>
+  <div id="magnifierWindow" class="magnifier-window" inert>
+    <div id="magnifierHeader" class="magnifier-header">
+      <span data-i18n="magnifier-title">Magnifier</span>
+      <button id="magnifierClose" type="button">&times;</button>
+    </div>
+    <div id="magnifierContent" class="magnifier-content"></div>
+  </div>
+  <div id="renderPreviewWindow" class="render-preview-window">
+    <div id="renderPreviewHeader" class="render-preview-header">
+      <span data-i18n="render-preview-title">Rendered Preview</span>
+      <button id="renderPreviewClose" type="button">&times;</button>
+    </div>
+    <div id="renderPreviewContent" class="render-preview-content"></div>
+    <div class="render-preview-footer">
+      <button id="renderPreviewPdf" class="btn" type="button" data-i18n="render-preview-pdf">Print / Save as PDF</button>
+    </div>
+  </div>
+
+{{BODY_SCRIPTS}}
+</body>
+</html>

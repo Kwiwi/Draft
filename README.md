@@ -2,18 +2,37 @@
 
 A note-taking web app packaged as a hybrid Android app with Capacitor.
 
-## Web app
+## Source of truth
 
-Static frontend:
+**Only edit in `~/draft_app` (this repo):**
 
-- `index.html`
-- `app.js`
-- `style.css`
-- `i18n.js`
+- `app.js` / `i18n.js` / `style.css` — shared logic
+- `index.template.html` — shared shell (placeholders for mode-specific head/scripts)
+- `capacitor.config.json` — main offline app (`com.kwiwi.draft`)
+- `capacitor.config.cdn.json` — CDN app id/name (`com.kwiwi.draft.cdn`)
 
-Open `index.html` in a browser, or serve the folder locally.
+Do **not** hand-edit `~/draft` or `~/draft_app_n` for features; refresh them from here.
 
-## Hybrid Android build
+## Multi-target build
+
+```bash
+npm install
+npm run build:all    # local + cdn + web
+# or one target:
+npm run build        # = build:local → www/  (Capacitor offline)
+npm run build:cdn    # → dist/cdn/
+npm run build:web    # → dist/web/  (Pages / browser, no native bridge)
+```
+
+| Target | Output | Use |
+|--------|--------|-----|
+| `local` | `www/` | Main Capacitor APK (vendored fonts/KaTeX) |
+| `cdn` | `dist/cdn/` | Light Capacitor APK (`Draft CDN`) |
+| `web` | `dist/web/` | Cloudflare Pages / static host |
+
+`index.html` at repo root is regenerated from the template when you `build:local` (convenience only).
+
+## Hybrid Android build (offline / main)
 
 ```bash
 npm install
@@ -21,6 +40,14 @@ npm run build
 npx cap add android   # first time only
 npx cap sync android
 cd android && ./gradlew assembleDebug
+```
+
+CDN APK (separate app id), from this same tree:
+
+```bash
+npm run build:cdn
+npx cap sync android --config capacitor.config.cdn.json   # if supported by your CLI flow
+# or keep using ~/draft_app_n after: npm run sync:cdn
 ```
 
 Or push to `main` and download the **draft-debug-apk-rN** artifact from the **Android APK** GitHub Action
@@ -74,16 +101,6 @@ gh secret set DRAFT_DEBUG_KEY_PASSWORD --body 'draft-debug'
 - Java 21
 - Android SDK
 
-## Offline assets
-
-CDN copies are vendored under:
-
-- `vendor/marked` — Markdown parser
-- `vendor/katex` — math rendering (JS/CSS/fonts)
-- `fonts/` — app typefaces (Cardo, Noto Serif HK, Source Han Serif SC as Noto Serif SC, Source Serif 4, plus Latin woff2 for Lora/Merriweather/Open Sans/Roboto)
-
-`npm run build` copies these into `www/` for Capacitor.
-
 ## App name & icon
 
 See [`resources/README.md`](resources/README.md) (中文小白说明).
@@ -91,12 +108,20 @@ See [`resources/README.md`](resources/README.md) (中文小白说明).
 - Name / ID: `capacitor.config.json` → `appName`, `appId`
 - Icon: replace `resources/icon.png` (1024×1024), then rebuild
 
-## Two editions
+## Satellite folders (optional mirrors)
 
-| Folder | Edition | Network |
-|--------|---------|---------|
-| `~/draft_app` | Offline assets vendored | Works offline |
-| `~/draft_app_n` | CDN fonts/libs | Needs network for fonts/math |
+| Folder | Role | Refresh |
+|--------|------|---------|
+| `~/draft_app` | **Canonical source** + local Capacitor | edit here |
+| `~/draft_app_n` | CDN Capacitor working copy | `npm run sync:cdn` |
+| `~/draft` | Web / Pages working copy | `npm run sync:web` |
+
+```bash
+npm run sync:cdn   # build:cdn → ~/draft_app_n
+npm run sync:web   # build:web → ~/draft  (+ dist/web for deploy)
+```
+
+Deploy Pages from `dist/web` (or `~/draft` after sync).
 
 ## Android back button & export
 
@@ -105,12 +130,10 @@ See [`resources/README.md`](resources/README.md) (中文小白说明).
 - **Direct export** (drawer / settings): source content — no markdown/math pass (`.txt` / `.md` / `.rtf` / `.source.html`).
 - **Render Preview export**: rendered snapshot (markdown + math) as self-contained `.rendered.html` with inlined fonts/KaTeX.
 
-## Sync CDN edition
+## Offline assets
 
-```bash
-./scripts/sync-cdn-edition.sh
-```
+`npm run build` (local) still vendors into `www/`:
 
-Copies `app.js` / `i18n.js` / `style.css` / native bridge into `~/draft_app_n`.
-That folder keeps its own CDN `index.html` and `com.kwiwi.draft.cdn` identity.
+- `vendor/marked`, `vendor/katex`, `vendor/draft-native.js`
+- `fonts/`
 
