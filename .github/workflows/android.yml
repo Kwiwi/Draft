@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -104,3 +104,19 @@ jobs:
           name: draft-debug-apk-r${{ github.run_number }}
           path: dist/*.apk
           if-no-files-found: error
+
+      # Public download target for site link: https://github.com/Kwiwi/Draft/releases/latest
+      - name: Publish rolling debug release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="debug-latest"
+          TITLE="Draft debug (latest)"
+          NOTES="Sideload debug APK from CI run ${{ github.run_number }} (${GITHUB_SHA:0:7}). Same stable debug signature — install over previous debug builds. Not for Play Store."
+          # Keep a single moving "latest" debug tag for the site download link.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" dist/*.apk \
+            --title "$TITLE" \
+            --notes "$NOTES" \
+            --latest
