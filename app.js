@@ -7,6 +7,14 @@ let Draft = {
 
 
 // ===== Capacitor / native helpers =====
+function getAssetMode() {
+  const mode = (window.DRAFT_ASSET_MODE || 'local').toLowerCase();
+  return mode === 'cdn' ? 'cdn' : 'local';
+}
+
+const KATEX_CDN_BASE = 'https://cdn.jsdelivr.net/npm/katex@0.19.1/dist';
+const GOOGLE_FONTS_CSS = 'https://fonts.googleapis.com/css2?family=Cardo:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Noto+Serif+HK:wght@400;700&family=Noto+Serif+SC:wght@400;700&family=Open+Sans:ital,wght@0,400;0,700;1,400&family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,700&display=swap';
+
 function getDraftNative() {
   return window.DraftNative || null;
 }
@@ -1515,6 +1523,12 @@ const EXPORT_SYSTEM_FONT_FALLBACKS = {
 };
 
 async function buildEmbeddedFontCss(project) {
+  const family = getProjectFontFamily(project || {});
+  if (getAssetMode() === 'cdn') {
+    // CDN edition: rely on Google Fonts link in the export document head.
+    return { css: '', family, headLinks: [`<link rel="stylesheet" href="${GOOGLE_FONTS_CSS}">`] };
+  }
+
   const settings = getFontSettings(project || {});
   const faces = [];
   const familyNames = [];
@@ -1541,16 +1555,32 @@ async function buildEmbeddedFontCss(project) {
     }
   }
 
-  const family = familyNames
+  const stackedFamily = familyNames
     .flatMap(name => EXPORT_SYSTEM_FONT_FALLBACKS[name] || [`'${String(name).replace(/'/g, '')}'`])
     .concat(['serif'])
     .filter((value, index, arr) => arr.indexOf(value) === index)
     .join(', ');
 
-  return { css: faces.join('\n'), family };
+  return { css: faces.join('\n'), family: stackedFamily || family, headLinks: [] };
 }
 
 async function buildInlinedKatexCss() {
+  if (getAssetMode() === 'cdn') {
+    try {
+      const response = await fetch(`${KATEX_CDN_BASE}/katex.min.css`);
+      if (!response.ok) throw new Error('katex css fetch failed');
+      let css = await response.text();
+      css = css.replace(/url\((fonts\/[^)]+)\)/g, `url(${KATEX_CDN_BASE}/$1)`);
+      return { css, headLinks: [] };
+    } catch (error) {
+      console.warn('cdn katex css failed', error);
+      return {
+        css: '',
+        headLinks: [`<link rel="stylesheet" href="${KATEX_CDN_BASE}/katex.min.css">`]
+      };
+    }
+  }
+
   let css = await fetchTextAsset('vendor/katex/katex.min.css');
   const urls = Array.from(css.matchAll(/url\((fonts\/[^)]+)\)/g)).map(match => match[1]);
   const unique = [...new Set(urls)];
@@ -1562,8 +1592,10 @@ async function buildInlinedKatexCss() {
       console.warn('katex font embed failed', rel, error);
     }
   }
-  return css;
+  return { css, headLinks: [] };
 }
+
+
 
 function buildExportDom(project, options = {}) {
   const renderedMode = options.rendered === true;
@@ -1603,10 +1635,17 @@ function buildExportDom(project, options = {}) {
 async function buildStandaloneExportHtml(project, options = {}) {
   const renderedMode = options.rendered === true;
   const snapshot = buildExportDom(project, { rendered: renderedMode });
-  const { css: fontCss, family: embeddedFamily } = await buildEmbeddedFontCss(project);
-  const family = embeddedFamily || snapshot.family;
+  const fontPack = await buildEmbeddedFontCss(project);
+  const family = fontPack.family || snapshot.family;
+  const fontCss = fontPack.css || '';
+  const headLinks = [...(fontPack.headLinks || [])];
   // Only pull KaTeX CSS when the export actually contains rendered math markup.
-  const katexCss = renderedMode ? await buildInlinedKatexCss() : '';
+  let katexCss = '';
+  if (renderedMode) {
+    const katexPack = await buildInlinedKatexCss();
+    katexCss = katexPack.css || '';
+    headLinks.push(...(katexPack.headLinks || []));
+  }
   const printable = options.printable === true;
   const toolbar = printable ? `
   <div class="preview-toolbar">
@@ -1626,6 +1665,7 @@ async function buildStandaloneExportHtml(project, options = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="draft-export" content="${modeNote}">
   <title>${snapshot.title}</title>
+  ${headLinks.join('\n  ')}
   <style>
 ${fontCss}
 ${katexCss}
