@@ -1910,13 +1910,19 @@ function handleAndroidBackButton() {
   return false;
 }
 
+let androidBackButtonBound = false;
+
 function setupAndroidBackButton() {
+  if (androidBackButtonBound) return;
   const native = getDraftNative();
-  if (!isNativeApp() || !native || !native.App) return;
-  native.App.addListener('backButton', ({ canGoBack }) => {
+  if (!isNativeApp() || !native || !native.App || typeof native.App.addListener !== 'function') return;
+  androidBackButtonBound = true;
+  native.App.addListener('backButton', () => {
     if (handleAndroidBackButton()) return;
     // On home: leave the app (Android recent-tasks), instead of a random exit mid-flow.
-    native.App.minimizeApp();
+    if (typeof native.App.minimizeApp === 'function') {
+      native.App.minimizeApp();
+    }
   });
 }
 
@@ -1984,6 +1990,16 @@ function applyTheme(isDark) {
 
 applyTheme(localStorage.getItem('theme') === 'dark');
 
+function revealBootUi() {
+  const root = document.documentElement;
+  if (!root.classList.contains('boot-pending')) return;
+  // One frame with final theme/lang styles, then show (avoids transition flash).
+  requestAnimationFrame(() => {
+    root.classList.remove('boot-pending');
+  });
+}
+revealBootUi();
+
 async function toggleTheme() {
   // Keep both entry points in sync; do not queue folds on rapid taps.
   if (themeFolding) return;
@@ -2011,6 +2027,8 @@ async function toggleTheme() {
     // Change the theme at the crease, never display the two blues side by side.
     applyTheme(isDark);
     localStorage.setItem('theme', isDark ? 'dark' : 'light');
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) themeColorMeta.content = isDark ? '#111111' : '#ffffff';
     if (!localStorage.getItem('tool-color-custom')) {
       setToolColor(isDark ? '#0046BF' : '#1F7FFF', false);
     }
@@ -2415,3 +2433,5 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 syncTabs();
+setupAndroidBackButton();
+revealBootUi();

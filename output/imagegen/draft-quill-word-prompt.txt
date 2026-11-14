@@ -1,0 +1,9 @@
+Use case: precise-object-edit
+Asset type: square editorial illustration for the Draft writing app, 1024 x 1024.
+Input image: edit target, the supplied blue, ivory and black feather-quill illustration.
+Primary request: Remove the abstract hand completely and replace that hand with the clearly readable word "Draft". Preserve the oversized feather quill, its diagonal sweep, pointed nib, the separate ink flourish below, the irregular ivory carrier shape and the full-bleed sky blue outer field.
+Edit region: remove every looping hand/finger contour beside the lower quill shaft in the lower-middle part of the ivory shape, both the small bracket-like contour to the left and the large looping contours to the right. Restore clean ivory behind those removed marks. In that freed ivory space to the right of the lower shaft, place "Draft" on one legible line, naturally balanced with the quill, with enough clearance from the shaft and ink flourish.
+Text (verbatim): "Draft". Capital D followed by lowercase r a f t, exactly once. Use substantial, literary serif lettering with a subtle hand-drawn personality, black, clear and easily readable; confident simple letterforms and open spacing. The word must be recognizable immediately. Keep letters separate from the feather and ink curl.
+Style/medium: retain the Anthropic editorial visual language of the source: boldly simplified organic black forms, naive uneven rounded ink contours, asymmetry and flat opaque colors. Keep the feather abstract and expressive.
+Color palette: near-black #141413, ivory #FAF9F5, solid sky blue #6A9BCC only. Uniform flat color fields, no texture, no grain, no gradients, no shadows.
+Constraints: preserve square composition and original visual identity. No hands, fingers, wrists, pinching loops or other anatomy remain. No extra text, no additional objects, no watermark. All canvas corners stay opaque sky blue. Preserve broad breathing room around the word and existing quill.

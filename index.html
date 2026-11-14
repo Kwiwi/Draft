@@ -7,12 +7,36 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Draft</title>
+  <meta name="theme-color" content="#ffffff">
   <!-- Local fonts + KaTeX (offline-friendly). -->
   <script>window.DRAFT_ASSET_MODE = 'local';</script>
+  <!-- Apply saved theme/lang before first paint to avoid day→night / EN→ZH flash. -->
+  <script>
+    (function () {
+      try {
+        var root = document.documentElement;
+        var dark = localStorage.getItem('theme') === 'dark';
+        if (dark) root.setAttribute('data-theme', 'dark');
+        else root.removeAttribute('data-theme');
+        var lang = localStorage.getItem('lang');
+        if (localStorage.getItem('lang-user-set') === '1' && (lang === 'zh' || lang === 'en')) {
+          root.lang = lang === 'zh' ? 'zh-CN' : 'en';
+          root.setAttribute('data-lang', lang);
+        }
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = dark ? '#111111' : '#ffffff';
+      } catch (e) {}
+      document.documentElement.classList.add('boot-pending');
+      // Safety: never leave UI hidden if a later script fails.
+      setTimeout(function () {
+        document.documentElement.classList.remove('boot-pending');
+      }, 2500);
+    })();
+  </script>
   <link rel="stylesheet" href="fonts/app-fonts.css">
   <link rel="stylesheet" href="fonts/latin-fonts.css">
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="style.css?v=0.9.15">
+  <link rel="stylesheet" href="style.css?v=0.9.16">
 </head>
 <body>
 
@@ -285,7 +309,7 @@
   <script src="vendor/marked/marked.umd.js"></script>
   <script src="vendor/katex/katex.min.js"></script>
   <script src="vendor/katex/auto-render.min.js"></script>
-  <script src="i18n.js?v=0.9.11"></script>
-  <script src="app.js?v=0.9.15"></script>
+  <script src="i18n.js?v=0.9.16"></script>
+  <script src="app.js?v=0.9.16"></script>
 </body>
 </html>

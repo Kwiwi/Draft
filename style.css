@@ -63,6 +63,22 @@
 
 html {
   scroll-behavior: smooth;
+  background: var(--color-bg);
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* Hide UI until theme + i18n bootstrap finish (see head script + app.js). */
+html.boot-pending body {
+  visibility: hidden;
+}
+
+html.boot-pending body,
+html.boot-pending body * {
+  transition: none !important;
 }
 
 body {

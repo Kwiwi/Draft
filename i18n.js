@@ -123,6 +123,7 @@ function switchLanguage(lang) {
   currentLang = lang;
   const t = translations[lang];
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.documentElement.setAttribute('data-lang', lang);
 
   document.querySelectorAll('[data-i18n]').forEach(function(el) {
     const key = el.getAttribute('data-i18n');
@@ -150,7 +151,7 @@ function switchLanguage(lang) {
   if (typeof renderAnnotations === 'function' && annotationView && annotationView.classList.contains('active')) renderAnnotations();
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+function initLanguage() {
   const langButtons = document.querySelectorAll('.lang-bar button');
 
   langButtons.forEach(function(btn) {
@@ -164,6 +165,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
   const savedLang = localStorage.getItem('lang');
   const hasUserPreference = localStorage.getItem('lang-user-set') === '1';
-  const initialLang = hasUserPreference && translations[savedLang] ? savedLang : 'en';
-  switchLanguage(initialLang);
-});
+  const preferred = document.documentElement.getAttribute('data-lang');
+  const initialLang = (hasUserPreference && translations[savedLang] && savedLang)
+    || (translations[preferred] && preferred)
+    || 'en';
+  // Restore only; do not mark as user-set on cold start.
+  if (!translations[initialLang]) return;
+  currentLang = initialLang;
+  const t = translations[initialLang];
+  document.documentElement.lang = initialLang === 'zh' ? 'zh-CN' : 'en';
+  document.documentElement.setAttribute('data-lang', initialLang);
+
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    const key = el.getAttribute('data-i18n');
+    if (key && t[key] !== undefined) {
+      if (el.tagName === 'INPUT') el.placeholder = t[key];
+      else el.textContent = t[key];
+    }
+  });
+
+  document.querySelectorAll('.lang-bar button').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-lang') === initialLang);
+  });
+}
+
+// Script is at end of body: apply immediately so app.js can reveal without EN flash.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initLanguage);
+} else {
+  initLanguage();
+}

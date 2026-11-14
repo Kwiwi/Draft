@@ -1,0 +1,13 @@
+Use case: stylized-concept
+Asset type: square editorial illustration used as a writing app icon, 1024 x 1024 pixels.
+Primary request: Illustrate quiet, thoughtful writing through one hand holding a pen and making a few loose ink strokes on a sheet of paper.
+Input images: all three supplied images are style references only, not edit targets. Transfer their bold gestural contours and irregular ivory shapes; create an original composition with a writing hand, not houses, globes, or lightbulbs.
+Scene/backdrop: full-bleed opaque sky blue #6A9BCC background covering every corner, with no border or transparency.
+Subject: one simplified hand gripping a pen naturally, poised diagonally with its tip touching an irregular ivory sheet. Two or three short, confident handwritten strokes suggest a draft, with no readable letters. The paper itself is the single large ivory carrier shape behind the black drawing.
+Style/medium: Anthropic editorial illustration language; naive black ink gesture; bold, slightly uneven rounded strokes; simplified anatomy; deliberate asymmetry; flat two-dimensional shapes. Quiet, literary, restrained, and practical, matching a minimal serif writing app.
+Composition/framing: square, one centered focal cluster occupying about 75% of the canvas, generous breathing room, all important marks within the central 70% for app-icon cropping; legible at 48px. The hand enters from the lower right but remains comfortably inside the canvas. Strong simple silhouette and few internal marks.
+Color palette: near-black #141413 linework, one large irregular ivory #FAF9F5 paper silhouette, full-frame sky #6A9BCC background. Only these three colors.
+Materials/textures: clean flat colors, subtle analog wobble in contours only.
+Text: none.
+Constraints: every pixel opaque; blue field behind irregular ivory paper with black hand-drawn marks on top. Preserve the open-loop hand gestures and stroke weight of the references while showing an unmistakable pen grip and writing action.
+Avoid: transparent or white outer canvas, black background, photorealism, 3D, gradients, shadows, lighting effects, grain, fine technical lines, polished stock vectors, perfect geometry, extra fingers, multiple hands, dense detail, decorative objects, logos, watermark, copied reference compositions.
