@@ -55,3 +55,9 @@ See [`resources/README.md`](resources/README.md) (中文小白说明).
 | `~/draft_app` | Offline assets vendored | Works offline |
 | `~/draft_app_n` | CDN fonts/libs | Needs network for fonts/math |
 
+## Android back button & export
+
+- Hardware back closes overlays first, then edit → view → home, then minimizes the app.
+- Export on device uses the system share sheet (Save to Files / Drive / etc.).
+- PDF on Android opens the in-app preview and shares an `.html` file (WebView cannot print like desktop Chrome).
+

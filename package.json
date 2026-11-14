@@ -4,15 +4,25 @@
   "private": true,
   "description": "Draft hybrid Android app",
   "scripts": {
-    "build": "mkdir -p www && cp index.html app.js i18n.js style.css www/ && rm -rf www/vendor www/fonts && cp -r vendor fonts www/",
-    "resources": "npx capacitor-assets generate --android --assetPath resources"
+    "build": "npm run native-bridge && mkdir -p www && cp index.html app.js i18n.js style.css www/ && rm -rf www/vendor www/fonts && cp -r vendor fonts www/",
+    "resources": "npx capacitor-assets generate --android --assetPath resources",
+    "native-bridge": "node scripts/build-native-bridge.js"
   },
   "devDependencies": {
     "@capacitor/android": "^7.4.3",
     "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^7.4.3",
     "@capacitor/core": "^7.4.3",
+    "esbuild": "^0.28.2",
     "katex": "^0.19.1",
     "marked": "^15.0.12"
+  },
+  "dependencies": {
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/filesystem": "^7.1.9",
+    "@capacitor/share": "^7.0.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

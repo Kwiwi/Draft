@@ -5,6 +5,83 @@ let Draft = {
   mode: "home",
 };
 
+
+// ===== Capacitor / native helpers =====
+function getDraftNative() {
+  return window.DraftNative || null;
+}
+
+function isNativeApp() {
+  const native = getDraftNative();
+  try {
+    return Boolean(native && native.Capacitor && native.Capacitor.isNativePlatform());
+  } catch (error) {
+    return false;
+  }
+}
+
+function isShown(el) {
+  return Boolean(el && el.classList.contains('show'));
+}
+
+function isUiActive(el) {
+  return Boolean(el && el.classList.contains('active'));
+}
+
+function hideExportMenus() {
+  document.querySelectorAll('.export-options').forEach(options => options.classList.remove('show'));
+}
+
+function closeConfirmModal() {
+  const modal = document.getElementById('confirmModal');
+  if (!modal) return;
+  modal.classList.remove('show');
+  const cancelBtn = document.getElementById('confirmCancel');
+  if (cancelBtn) cancelBtn.onclick = null;
+  const okBtn = document.getElementById('confirmOk');
+  if (okBtn) okBtn.onclick = null;
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('base64 failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function shareNativeFile(filename, data, encoding) {
+  const native = getDraftNative();
+  if (!native) throw new Error('native bridge missing');
+  const path = `exports/${filename}`;
+  const written = await native.Filesystem.writeFile({
+    path,
+    data,
+    directory: native.Directory.Cache,
+    encoding,
+    recursive: true
+  });
+  let uri = written && written.uri;
+  if (!uri) {
+    const result = await native.Filesystem.getUri({
+      path,
+      directory: native.Directory.Cache
+    });
+    uri = result.uri;
+  }
+  await native.Share.share({
+    title: filename,
+    url: uri,
+    dialogTitle: filename
+  });
+}
+
+
 let state = {
   currentProjectId: null,
   theme: "light"
@@ -1172,8 +1249,23 @@ function getExportFilename(title, extension) {
   return `${safeTitle}.${extension}`;
 }
 
-function downloadExport(filename, content, type) {
-  const blob = new Blob([content], { type });
+async function downloadExport(filename, content, type) {
+  const blob = content instanceof Blob
+    ? content
+    : new Blob([content], { type: type || 'application/octet-stream' });
+
+  if (isNativeApp()) {
+    try {
+      const base64 = await blobToBase64(blob);
+      await shareNativeFile(filename, base64);
+      return;
+    } catch (error) {
+      console.error('native export failed', error);
+      showAlert('export-failed');
+      return;
+    }
+  }
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -1358,7 +1450,65 @@ function getProjectFontFamily(project) {
     .join(', ');
 }
 
-function exportPdf(project) {
+async function exportPdf(project) {
+  if (!project) {
+    showAlert('alert-select-project');
+    return;
+  }
+
+  // Capacitor WebView blocks window.open/print-based PDF flows.
+  // Use the in-app render preview, and on native also offer a shareable HTML file.
+  if (isNativeApp()) {
+    if (Draft.currentProjectId === project.id && Draft.mode === 'edit') {
+      persistEditorDraft();
+    }
+    Draft.currentProjectId = project.id;
+    if (renderPreviewWindow) {
+      renderDraftPreview(project);
+      renderPreviewWindow.classList.add('show');
+    }
+    const rendered = getRenderedDraftHtml(project);
+    const assetBase = new URL('.', window.location.href).href;
+    const html = `<!DOCTYPE html>
+<html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${rendered.title}</title>
+  <link rel="stylesheet" href="${assetBase}fonts/app-fonts.css">
+  <link rel="stylesheet" href="${assetBase}fonts/latin-fonts.css">
+  <link rel="stylesheet" href="${assetBase}vendor/katex/katex.min.css">
+  <style>
+    body { margin: 24px; color: #111; font-family: ${rendered.family}; }
+    h1 { margin: 0 0 24px; font-size: 2em; line-height: 1.2; }
+    .pdf-content { font-size: ${rendered.size}px; line-height: 1.6; overflow-wrap: anywhere; }
+    .pdf-content img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>${rendered.title}</h1>
+  <div class="pdf-content">${rendered.content}</div>
+  <script src="${assetBase}vendor/katex/katex.min.js"><\/script>
+  <script src="${assetBase}vendor/katex/auto-render.min.js"><\/script>
+  <script>
+    if (typeof renderMathInElement === 'function') {
+      renderMathInElement(document.querySelector('.pdf-content'), {
+        throwOnError: false,
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false },
+          { left: '$', right: '$', display: false }
+        ]
+      });
+    }
+  <\/script>
+</body>
+</html>`;
+    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
+    return;
+  }
+
   const preview = window.open('', '_blank', 'width=900,height=1000');
   if (!preview) {
     showAlert('export-popup-blocked');
@@ -1477,7 +1627,7 @@ function exportPdf(project) {
   preview.document.close();
 }
 
-function exportProject(format, projectId = Draft.drawerProjectId || Draft.currentProjectId) {
+async function exportProject(format, projectId = Draft.drawerProjectId || Draft.currentProjectId) {
   if (projectId === Draft.currentProjectId && Draft.mode === 'edit') persistEditorDraft();
   const project = getProject(projectId);
   if (!project) {
@@ -1485,20 +1635,111 @@ function exportProject(format, projectId = Draft.drawerProjectId || Draft.curren
     return;
   }
 
-  if (format === 'md') {
-    downloadExport(getExportFilename(project.title, 'md'), `\uFEFF${projectMarkdown(project)}`, 'text/markdown;charset=utf-8');
-  } else if (format === 'rtf') {
-    downloadExport(getExportFilename(project.title, 'rtf'), projectRtf(project), 'application/rtf');
-  } else if (format === 'txt') {
-    downloadExport(getExportFilename(project.title, 'txt'), `${project.title || 'Untitled'}\n\n${projectPlainText(project)}`, 'text/plain;charset=utf-8');
-  } else if (format === 'pdf') {
-    exportPdf(project);
+  try {
+    if (format === 'md') {
+      await downloadExport(getExportFilename(project.title, 'md'), `\uFEFF${projectMarkdown(project)}`, 'text/markdown;charset=utf-8');
+    } else if (format === 'rtf') {
+      await downloadExport(getExportFilename(project.title, 'rtf'), projectRtf(project), 'application/rtf');
+    } else if (format === 'txt') {
+      await downloadExport(getExportFilename(project.title, 'txt'), `${project.title || 'Untitled'}\n\n${projectPlainText(project)}`, 'text/plain;charset=utf-8');
+    } else if (format === 'pdf') {
+      await exportPdf(project);
+    }
+  } catch (error) {
+    console.error('export failed', error);
+    showAlert('export-failed');
   }
 }
 
 editorBottomTopBtn.addEventListener('click', () => {
   document.getElementById('editorView').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+
+
+
+function handleAndroidBackButton() {
+  hideExportMenus();
+
+  const alertModal = document.getElementById('alertModal');
+  if (isShown(alertModal)) {
+    alertModal.classList.remove('show');
+    return true;
+  }
+
+  const confirmModal = document.getElementById('confirmModal');
+  if (isShown(confirmModal)) {
+    closeConfirmModal();
+    return true;
+  }
+
+  if (isShown(document.getElementById('pinModal'))) {
+    closePinModal();
+    return true;
+  }
+
+  if (isShown(document.getElementById('renameModal'))) {
+    closeRenameModal();
+    return true;
+  }
+
+  if (isShown(document.getElementById('projectDrawer'))) {
+    closeDrawer();
+    return true;
+  }
+
+  if (isShown(document.getElementById('editorSettingsDrawer'))) {
+    closeEditorSettings();
+    return true;
+  }
+
+  if (toolPalette && toolPalette.classList.contains('show')) {
+    toolPalette.classList.remove('show');
+    if (toolColorPanel) toolColorPanel.classList.remove('show');
+    return true;
+  }
+
+  if (selectionToolbar && selectionToolbar.classList.contains('show')) {
+    hideSelectionToolbar();
+    return true;
+  }
+
+  if (isShown(renderPreviewWindow)) {
+    closeRenderPreview();
+    return true;
+  }
+
+  if (isShown(magnifierWindow)) {
+    closeMagnifier();
+    return true;
+  }
+
+  if (annotationView && annotationView.classList.contains('active')) {
+    closeAnnotationPage();
+    return true;
+  }
+
+  if (Draft.mode === 'edit') {
+    enterViewMode();
+    return true;
+  }
+
+  if (Draft.mode === 'view') {
+    goHome();
+    return true;
+  }
+
+  return false;
+}
+
+function setupAndroidBackButton() {
+  const native = getDraftNative();
+  if (!isNativeApp() || !native || !native.App) return;
+  native.App.addListener('backButton', ({ canGoBack }) => {
+    if (handleAndroidBackButton()) return;
+    // On home: leave the app (Android recent-tasks), instead of a random exit mid-flow.
+    native.App.minimizeApp();
+  });
+}
 
 // ===== 返回首页 =====
 function goHome() {
