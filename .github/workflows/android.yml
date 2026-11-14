@@ -47,6 +47,9 @@ jobs:
       - name: Sync web assets into Android project
         run: npx cap sync android
 
+      - name: Generate launcher icons
+        run: npx capacitor-assets generate --android --assetPath resources
+
       - name: Build debug APK
         working-directory: android
         run: |

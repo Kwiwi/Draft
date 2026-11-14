@@ -4,10 +4,12 @@
   "private": true,
   "description": "Draft hybrid Android app",
   "scripts": {
-    "build": "mkdir -p www && cp index.html app.js i18n.js style.css www/ && rm -rf www/vendor www/fonts && cp -r vendor fonts www/"
+    "build": "mkdir -p www && cp index.html app.js i18n.js style.css www/ && rm -rf www/vendor www/fonts && cp -r vendor fonts www/",
+    "resources": "npx capacitor-assets generate --android --assetPath resources"
   },
   "devDependencies": {
     "@capacitor/android": "^7.4.3",
+    "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "katex": "^0.19.1",

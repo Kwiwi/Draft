@@ -41,3 +41,17 @@ CDN copies are vendored under:
 
 `npm run build` copies these into `www/` for Capacitor.
 
+## App name & icon
+
+See [`resources/README.md`](resources/README.md) (中文小白说明).
+
+- Name / ID: `capacitor.config.json` → `appName`, `appId`
+- Icon: replace `resources/icon.png` (1024×1024), then rebuild
+
+## Two editions
+
+| Folder | Edition | Network |
+|--------|---------|---------|
+| `~/draft_app` | Offline assets vendored | Works offline |
+| `~/draft_app_n` | CDN fonts/libs | Needs network for fonts/math |
+
