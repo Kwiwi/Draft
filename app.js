@@ -1565,37 +1565,49 @@ async function buildInlinedKatexCss() {
   return css;
 }
 
-function buildRenderedExportDom(project) {
-  const rendered = getRenderedDraftHtml(project);
+function buildExportDom(project, options = {}) {
+  const renderedMode = options.rendered === true;
+  const settings = getFontSettings(project || {});
+  const titleText = (project && project.title) || 'Untitled';
+  const family = getProjectFontFamily(project || {});
+  const size = settings.size;
+  const bodySource = renderedMode
+    ? getRenderedDraftHtml(project).content
+    : (project && project.content ? project.content : '<p><br></p>');
+
   const host = document.createElement('div');
   host.className = 'export-render-root';
   host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
-  host.style.fontFamily = rendered.family;
-  host.style.fontSize = `${rendered.size}px`;
+  host.style.fontFamily = family;
+  host.style.fontSize = `${size}px`;
   host.style.lineHeight = '1.6';
-  host.innerHTML = `<div class="export-body">${rendered.content}</div>`;
+  host.innerHTML = `<div class="export-body">${bodySource}</div>`;
   document.body.appendChild(host);
-  applyRelativeFontSizes(host, rendered.size);
-  renderMath(host);
+  applyRelativeFontSizes(host, size);
+  if (renderedMode) renderMath(host);
   const bodyHtml = host.querySelector('.export-body').innerHTML;
   const plainText = (host.innerText || host.textContent || '').replace(/\u00a0/g, ' ').trim();
   document.body.removeChild(host);
+
   return {
-    title: rendered.title,
-    titleText: (project && project.title) || 'Untitled',
+    title: escapeHtml(titleText),
+    titleText,
     bodyHtml,
     plainText,
-    family: rendered.family,
-    size: rendered.size
+    family,
+    size,
+    rendered: renderedMode
   };
 }
 
 async function buildStandaloneExportHtml(project, options = {}) {
-  const snapshot = buildRenderedExportDom(project);
+  const renderedMode = options.rendered === true;
+  const snapshot = buildExportDom(project, { rendered: renderedMode });
   const { css: fontCss, family: embeddedFamily } = await buildEmbeddedFontCss(project);
   const family = embeddedFamily || snapshot.family;
-  const katexCss = await buildInlinedKatexCss();
-  const printable = options.printable !== false;
+  // Only pull KaTeX CSS when the export actually contains rendered math markup.
+  const katexCss = renderedMode ? await buildInlinedKatexCss() : '';
+  const printable = options.printable === true;
   const toolbar = printable ? `
   <div class="preview-toolbar">
     <button id="printButton" type="button">Print / Save as PDF</button>
@@ -1604,13 +1616,15 @@ async function buildStandaloneExportHtml(project, options = {}) {
   <script>
     var printButton = document.getElementById('printButton');
     if (printButton) printButton.addEventListener('click', function () { window.print(); });
-  <\\/script>` : '';
+  <\/script>` : '';
+  const modeNote = renderedMode ? 'rendered' : 'source';
 
   return `<!DOCTYPE html>
 <html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="draft-export" content="${modeNote}">
   <title>${snapshot.title}</title>
   <style>
 ${fontCss}
@@ -1690,20 +1704,6 @@ ${katexCss}
 </html>`;
 }
 
-function projectRenderedPlainText(project) {
-  return buildRenderedExportDom(project).plainText;
-}
-
-function projectRenderedRtf(project) {
-  const snapshot = buildRenderedExportDom(project);
-  const fake = {
-    ...project,
-    content: snapshot.bodyHtml,
-    title: snapshot.titleText
-  };
-  return projectRtf(fake);
-}
-
 
 function getProjectFontFamily(project) {
   const settings = getFontSettings(project || {});
@@ -1713,7 +1713,7 @@ function getProjectFontFamily(project) {
     .join(', ');
 }
 
-async function exportPdf(project) {
+async function exportPdf(project, options = {}) {
   if (!project) {
     showAlert('alert-select-project');
     return;
@@ -1724,23 +1724,34 @@ async function exportPdf(project) {
     project = getProject(project.id) || project;
   }
 
-  // Always use the same rendered snapshot as Render Preview (markdown + math).
-  // Standalone HTML inlines fonts/KaTeX so shared files still look right outside the app.
-  const html = await buildStandaloneExportHtml(project, { printable: !isNativeApp() });
+  // rendered:true  => Render Preview export (markdown + math)
+  // rendered:false => direct export (editor source, no markdown/math pass)
+  const renderedMode = options.rendered === true;
+  const html = await buildStandaloneExportHtml(project, {
+    rendered: renderedMode,
+    printable: !isNativeApp()
+  });
 
   if (isNativeApp()) {
-    if (renderPreviewWindow) {
+    // Only jump to the in-app preview when exporting the rendered version.
+    if (renderedMode && renderPreviewWindow) {
       renderDraftPreview(project);
       renderPreviewWindow.classList.add('show');
     }
-    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
+    // Distinguish filenames so rendered vs source exports can coexist.
+    const filename = renderedMode
+      ? getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html')
+      : getExportFilename(project.title, 'html').replace(/\.html$/i, '.source.html');
+    await downloadExport(filename, html, 'text/html;charset=utf-8');
     return;
   }
 
   const preview = window.open('', '_blank', 'width=900,height=1000');
   if (!preview) {
-    // Fallback: download self-contained HTML if pop-up blocked.
-    await downloadExport(getExportFilename(project.title, 'html'), html, 'text/html;charset=utf-8');
+    const filename = renderedMode
+      ? getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html')
+      : getExportFilename(project.title, 'html').replace(/\.html$/i, '.source.html');
+    await downloadExport(filename, html, 'text/html;charset=utf-8');
     showAlert('export-popup-blocked');
     return;
   }
@@ -1758,20 +1769,20 @@ async function exportProject(format, projectId = Draft.drawerProjectId || Draft.
   }
 
   try {
+    // Direct export = editor source (no markdown/math rendering).
+    // Render Preview has its own export button for the rendered snapshot.
     if (format === 'md') {
-      // Markdown export keeps the editable source (pre-render).
       await downloadExport(getExportFilename(project.title, 'md'), `\uFEFF${projectMarkdown(project)}`, 'text/markdown;charset=utf-8');
     } else if (format === 'rtf') {
-      // RTF/TXT/PDF all use the same Render Preview snapshot.
-      await downloadExport(getExportFilename(project.title, 'rtf'), projectRenderedRtf(project), 'application/rtf');
+      await downloadExport(getExportFilename(project.title, 'rtf'), projectRtf(project), 'application/rtf');
     } else if (format === 'txt') {
       await downloadExport(
         getExportFilename(project.title, 'txt'),
-        `${project.title || 'Untitled'}\n\n${projectRenderedPlainText(project)}`,
+        `${project.title || 'Untitled'}\n\n${projectPlainText(project)}`,
         'text/plain;charset=utf-8'
       );
     } else if (format === 'pdf') {
-      await exportPdf(project);
+      await exportPdf(project, { rendered: false });
     }
   } catch (error) {
     console.error('export failed', error);
@@ -2280,7 +2291,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if (renderPreviewClose) renderPreviewClose.addEventListener('click', closeRenderPreview);
   if (renderPreviewPdf) renderPreviewPdf.addEventListener('click', () => {
     const project = getProject(Draft.currentProjectId);
-    if (project) exportPdf(project);
+    if (project) exportPdf(project, { rendered: true });
   });
   if (annotationsBtn) annotationsBtn.addEventListener('click', openAnnotationPage);
   if (annotationBackBtn) annotationBackBtn.addEventListener('click', closeAnnotationPage);

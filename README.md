@@ -59,6 +59,6 @@ See [`resources/README.md`](resources/README.md) (中文小白说明).
 
 - Hardware back closes overlays first, then edit → view → home, then minimizes the app.
 - Export on device uses the system share sheet (Save to Files / Drive / etc.).
-- PDF on Android opens the in-app preview and shares a **self-contained `.html`** (fonts/KaTeX inlined; markdown+math already rendered).
-- Direct export (txt/rtf/pdf) uses the **same rendered snapshot** as Render Preview. `.md` stays editable source.
+- **Direct export** (drawer / settings): source content — no markdown/math pass (`.txt` / `.md` / `.rtf` / `.source.html`).
+- **Render Preview export**: rendered snapshot (markdown + math) as self-contained `.rendered.html` with inlined fonts/KaTeX.
 
