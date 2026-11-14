@@ -62,3 +62,12 @@ See [`resources/README.md`](resources/README.md) (中文小白说明).
 - **Direct export** (drawer / settings): source content — no markdown/math pass (`.txt` / `.md` / `.rtf` / `.source.html`).
 - **Render Preview export**: rendered snapshot (markdown + math) as self-contained `.rendered.html` with inlined fonts/KaTeX.
 
+## Sync CDN edition
+
+```bash
+./scripts/sync-cdn-edition.sh
+```
+
+Copies `app.js` / `i18n.js` / `style.css` / native bridge into `~/draft_app_n`.
+That folder keeps its own CDN `index.html` and `com.kwiwi.draft.cdn` identity.
+
