@@ -30,3 +30,14 @@ Or push to `main` and download the **draft-debug-apk** artifact from the **Andro
 - Node.js 22+
 - Java 21
 - Android SDK
+
+## Offline assets
+
+CDN copies are vendored under:
+
+- `vendor/marked` — Markdown parser
+- `vendor/katex` — math rendering (JS/CSS/fonts)
+- `fonts/` — app typefaces (Cardo, Noto Serif HK, Source Han Serif SC as Noto Serif SC, Source Serif 4, plus Latin woff2 for Lora/Merriweather/Open Sans/Roboto)
+
+`npm run build` copies these into `www/` for Capacitor.
+

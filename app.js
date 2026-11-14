@@ -1367,8 +1367,11 @@ function exportPdf(project) {
 
   const rendered = getRenderedDraftHtml(project);
   const { title, content, family, size } = rendered;
-  const fontLink = document.head.querySelector('link[href*="fonts.googleapis.com"]');
-  const fontLinkHtml = fontLink ? `<link rel="stylesheet" href="${fontLink.href}">` : '';
+  const assetBase = new URL('.', window.location.href).href;
+  const fontLinkHtml = [
+    `<link rel="stylesheet" href="${assetBase}fonts/app-fonts.css">`,
+    `<link rel="stylesheet" href="${assetBase}fonts/latin-fonts.css">`
+  ].join('\n  ');
 
   preview.document.write(`<!DOCTYPE html>
 <html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
@@ -1377,7 +1380,7 @@ function exportPdf(project) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - PDF Preview</title>
   ${fontLinkHtml}
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/katex.min.css">
+  <link rel="stylesheet" href="${assetBase}vendor/katex/katex.min.css">
   <style>
     @page { size: A4; margin: 18mm 16mm; }
     :root { color-scheme: light; }
@@ -1452,7 +1455,8 @@ function exportPdf(project) {
     <h1>${title}</h1>
     <div class="pdf-content">${content}</div>
   </main>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/contrib/auto-render.min.js"><\/script>
+  <script src="${assetBase}vendor/katex/katex.min.js"><\/script>
+  <script src="${assetBase}vendor/katex/auto-render.min.js"><\/script>
   <script>
     document.getElementById('printButton').addEventListener('click', () => window.print());
     document.getElementById('closeButton').addEventListener('click', () => window.close());

@@ -1,0 +1,58 @@
+/* Local core fonts (CJK + Cardo + Source Serif 4). Latin webfonts: latin-fonts.css */
+
+@font-face {
+  font-family: 'Cardo';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(Cardo-Regular.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Noto Serif HK';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url(NotoSerifHK-Variable.ttf) format('truetype');
+}
+
+/* Source Han Serif SC stands in for the Noto Serif SC option offline */
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(SourceHanSerifSC-Regular.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(SourceSerif4-Regular.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(SourceSerif4-Bold.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(SourceSerif4-Italic.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url(SourceSerif4-BoldItalic.ttf) format('truetype');
+}
