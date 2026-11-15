@@ -1,0 +1,50 @@
+# ---------- Dependencies ----------
+node_modules/
+.pnp
+.pnp.js
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Capacitor / Android ----------
+android/
+ios/
+.capacitor/
+android/app/ci-debug.keystore
+android/app/ci-debug-signing.gradle
+*.apk
+*.aab
+*.jks
+*.p12
+
+# ---------- Signing secrets (never commit) ----------
+.signing/
+*.keystore
+!resources/*.keystore
+github-secrets.txt
+.env
+.env.*
+!.env.example
+
+# ---------- Build output ----------
+dist/
+www/
+*.zip
+build/
+out/
+.DS_Store
+Thumbs.db
+
+# ---------- Custom build targets ----------
+# Generated from index.template.html + app.js -> index.html
+# (uncomment the line below if you treat index.html as a build artifact)
+# index.html
+
+# ---------- Editor / OS ----------
+.vscode/
+.idea/
+*.swp
+*~
+*.log
