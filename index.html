@@ -59,9 +59,20 @@
 
   <!-- 首页：项目列表 -->
   <div class="section active" id="homeView">
-    <div class="label" data-i18n="label-home">Projects</div>
-    <button class="btn" onclick="createProject()" data-i18n="btn-new">+ Draft</button>
-
+    <div class="home-heading">
+      <div class="label" id="homePath">Drafts</div>
+      <div class="home-actions">
+        <button class="btn" id="draftTabBtn" onclick="showDraftHome()" data-i18n="btn-drafts">Drafts</button>
+        <button class="btn" id="folderTabBtn" onclick="showFolderHome()" data-i18n="btn-folders">Folders</button>
+      </div>
+    </div>
+    <div id="draftActions" class="home-actions">
+      <button class="btn" onclick="createProject()" data-i18n="btn-new">+ Draft</button>
+      <button class="btn" onclick="createFolder()" data-i18n="btn-folder">Folder</button>
+    </div>
+    <div id="folderActions" class="home-actions hidden">
+      <button class="btn" onclick="createFolder()" data-i18n="btn-new-folder">+ New</button>
+    </div>
     <div id="projectList"></div>
   </div>
 
@@ -154,6 +165,35 @@
       </div>
     </div>
   </div>
+  <div id="folderDeleteModal" class="modal">
+    <div class="modal-box folder-delete-box">
+      <p id="folderDeleteText" data-i18n="folder-delete-warning">Delete folder?</p>
+      <div class="folder-delete-options">
+        <label class="danger-option" for="deleteIncludingDrafts">
+          <input id="deleteIncludingDrafts" type="checkbox">
+          <span data-i18n="including-drafts">Including drafts</span>
+        </label>
+        <label class="danger-option" for="deleteIncludingFolders">
+          <input id="deleteIncludingFolders" type="checkbox">
+          <span data-i18n="including-folders">Including folders</span>
+        </label>
+      </div>
+      <div class="modal-btns">
+        <button id="folderDeleteCancel" data-i18n="btn-cancel">Cancel</button>
+        <button id="folderDeleteOk" data-i18n="btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
+  <div id="nameModal" class="modal">
+    <div class="modal-box rename-box">
+      <p id="nameModalTitle" data-i18n="folder-name-title">Name folder</p>
+      <input id="nameModalInput" class="rename-input" type="text">
+      <div class="modal-btns">
+        <button id="nameModalCancel" data-i18n="btn-cancel">Cancel</button>
+        <button id="nameModalSave" data-i18n="btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
   <div id="pinModal" class="modal">
     <div class="modal-box pin-box">
       <p data-i18n="pin-title">Pin this draft?</p>
@@ -206,6 +246,20 @@
           <button type="button" data-export-format="md">.md</button>
           <button type="button" data-export-format="pdf">PDF</button>
         </div>
+      </div>
+      <div id="folderAddWrap" class="export-wrap drawer-export hidden">
+        <button id="drawerAddFolder" class="drawer-action" type="button" data-i18n="btn-add-to-folder">Add to folder</button>
+        <div id="folderPicker" class="export-options folder-picker-options"></div>
+      </div>
+      <div id="folderManageWrap" class="export-wrap drawer-export hidden">
+        <button id="drawerManage" class="drawer-action" type="button" data-i18n="btn-manage">Manage</button>
+        <div id="folderManageOptions" class="export-options">
+          <button type="button" id="manageRemoveDrafts" data-i18n="manage-remove">Remove drafts</button>
+          <button type="button" id="manageAddDrafts" data-i18n="manage-add">Add drafts</button>
+        </div>
+      </div>
+      <div id="folderManageListWrap" class="export-wrap drawer-export hidden">
+        <div id="folderManageList" class="export-options folder-picker-options show"></div>
       </div>
     </div>
     <div class="drawer-footer">

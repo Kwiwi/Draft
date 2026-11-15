@@ -281,6 +281,82 @@ button:focus-visible,
   transform: translateY(-1px);
 }
 
+
+
+.home-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.home-actions.hidden,
+.hidden { display: none !important; }
+.folder-count {
+  flex: 0 0 auto;
+  margin-left: 10px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.folder-delete-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  text-align: left;
+}
+.danger-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.danger-option input { margin: 0; accent-color: var(--color-danger); }
+.folder-picker,
+.folder-picker-options {
+  max-height: 240px;
+  overflow: auto;
+}
+.folder-picker label,
+.folder-picker-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-soft);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.folder-picker label:last-child,
+.folder-picker-options label:last-child { border-bottom: 0; }
+.folder-picker label:hover,
+.folder-picker-options label:hover {
+  background: var(--accent-soft);
+  color: var(--accent-color);
+}
+.folder-picker input,
+.folder-picker-options input { margin: 0; }
+#folderManageListWrap .folder-picker-options {
+  position: relative;
+  top: 0;
+  display: block;
+  margin-top: 8px;
+}
+
 #projectList {
   margin-top: 12px;
   border-top: 1px solid var(--color-border-soft);

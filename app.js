@@ -3,6 +3,12 @@ let Draft = {
   currentProjectId: null,
   dirty: false,
   mode: "home",
+  homeType: 'drafts',
+  folderId: null,
+  drawerProjectId: null,
+  drawerFolderId: null,
+  deleteFolderId: null,
+  nameModalMode: null,
 };
 
 
@@ -37,7 +43,12 @@ function isUiActive(el) {
 }
 
 function hideExportMenus() {
-  document.querySelectorAll('.export-options').forEach(options => options.classList.remove('show'));
+  document.querySelectorAll('.export-options').forEach(options => {
+    if (options.id === 'folderManageList') return;
+    options.classList.remove('show');
+  });
+  const manageListWrap = document.getElementById('folderManageListWrap');
+  if (manageListWrap) manageListWrap.classList.add('hidden');
 }
 
 function closeConfirmModal() {
@@ -348,6 +359,51 @@ editor.addEventListener('touchend', () => setTimeout(handleEditorSelectionChange
 
 function getProjects() {
   return JSON.parse(localStorage.getItem("draft_projects") || "[]");
+}
+
+function getFolders() {
+  return JSON.parse(localStorage.getItem('draft_folders') || '[]');
+}
+
+function saveFolders(list) {
+  localStorage.setItem('draft_folders', JSON.stringify(list));
+}
+
+function getFolder(id) {
+  return getFolders().find(folder => folder.id === id);
+}
+
+function folderPath(folderId) {
+  const folders = getFolders();
+  const names = [];
+  let current = folders.find(folder => folder.id === folderId);
+  const seen = new Set();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    names.unshift(current.title);
+    current = folders.find(folder => folder.id === current.parentId);
+  }
+  return names.join('/');
+}
+
+function descendants(folderId) {
+  const folders = getFolders();
+  const result = [];
+  const visit = id => folders.filter(folder => folder.parentId === id).forEach(folder => {
+    result.push(folder.id);
+    visit(folder.id);
+  });
+  visit(folderId);
+  return result;
+}
+
+function folderDraftCount(folderId) {
+  const ids = new Set([folderId, ...descendants(folderId)]);
+  return getProjects().filter(project => (project.folderIds || []).some(id => ids.has(id))).length;
+}
+
+function allFolderIds(folderId) {
+  return [folderId, ...descendants(folderId)];
 }
 
 function escapeHtml(text) {
@@ -706,10 +762,56 @@ function showConfirm(messageKey, onConfirm) {
 }
 
 // ===== 公共删除逻辑 =====
+function deleteFolder(id, includeDrafts, includeFolders) {
+  const target = getFolder(id);
+  if (!target) return;
+  const removed = new Set([id]);
+  if (includeFolders) descendants(id).forEach(childId => removed.add(childId));
+  let folders = getFolders();
+  const parentId = target.parentId || null;
+  if (!includeFolders) {
+    folders = folders.map(folder => folder.parentId === id ? Object.assign({}, folder, { parentId }) : folder);
+  }
+  folders = folders.filter(folder => !removed.has(folder.id));
+  let projects = getProjects();
+  if (includeDrafts) {
+    projects = projects.filter(project => !(project.folderIds || []).some(folderId => removed.has(folderId)));
+  } else {
+    projects = projects.map(project => Object.assign({}, project, {
+      folderIds: (project.folderIds || []).filter(folderId => !removed.has(folderId))
+    }));
+  }
+  saveFolders(folders);
+  saveProjects(projects);
+  if (Draft.folderId && removed.has(Draft.folderId)) {
+    Draft.folderId = parentId;
+    Draft.homeType = 'folders';
+  }
+  if (Draft.folderId && !getFolder(Draft.folderId)) Draft.folderId = null;
+  updateHomeControls();
+  renderProjects();
+}
+
+function openFolderDeleteModal(id) {
+  Draft.deleteFolderId = id;
+  const text = document.getElementById('folderDeleteText');
+  if (text) text.textContent = tKey('folder-delete-warning', 'Delete this folder?');
+  const drafts = document.querySelector('label[for="deleteIncludingDrafts"] span, #deleteIncludingDrafts + span');
+  const folders = document.querySelector('label[for="deleteIncludingFolders"] span, #deleteIncludingFolders + span');
+  if (drafts) drafts.textContent = tKey('including-drafts', 'Including drafts');
+  if (folders) folders.textContent = tKey('including-folders', 'Including folders');
+  document.getElementById('deleteIncludingDrafts').checked = false;
+  document.getElementById('deleteIncludingFolders').checked = false;
+  document.getElementById('folderDeleteModal').classList.add('show');
+}
+
+function closeFolderDeleteModal() {
+  document.getElementById('folderDeleteModal').classList.remove('show');
+  Draft.deleteFolderId = null;
+}
+
 function handleProjectDelete(id) {
-  showConfirm('confirm-delete', () => {
-    deleteProject(id);
-  });
+  showConfirm('confirm-delete', () => { deleteProject(id); });
 }
 
 // ===== 长按相关的全局状态 =====
@@ -724,60 +826,99 @@ const MOVE_THRESHOLD = 10;
 
 // ===== 渲染项目列表 =====
 function renderProjects() {
-  const projects = getProjects().sort((a, b) => {
-    const importanceDiff = (b.importance || 0) - (a.importance || 0);
-    if (importanceDiff !== 0) return importanceDiff;
-    return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+  const t = translations[currentLang] || translations.en || {};
+  const folders = getFolders();
+  const inFolder = Draft.folderId;
+  const showFolders = Draft.homeType === 'folders';
+  projectList.innerHTML = '';
+
+  const visibleFolders = showFolders
+    ? folders.filter(folder => (folder.parentId || null) === (inFolder || null))
+        .sort((a, b) => {
+          const d = (b.importance || 0) - (a.importance || 0);
+          return d !== 0 ? d : String(a.title || '').localeCompare(String(b.title || ''));
+        })
+    : [];
+
+  visibleFolders.forEach(folder => {
+    const childFolderCount = folders.filter(item => item.parentId === folder.id).length;
+    const draftCount = getProjects().filter(project => (project.folderIds || []).includes(folder.id)).length;
+    const card = document.createElement('div');
+    card.className = 'card folder-card';
+    card.dataset.folderId = folder.id;
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'card-title';
+    titleSpan.textContent = folder.title || '';
+    card.appendChild(titleSpan);
+    const meta = document.createElement('span');
+    meta.className = 'folder-count';
+    meta.textContent = (t['folder-count'] || '{folders} folders · {drafts} drafts')
+      .replace('{folders}', String(childFolderCount))
+      .replace('{drafts}', String(draftCount));
+    card.appendChild(meta);
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'card-settings-btn';
+    settingsBtn.type = 'button';
+    settingsBtn.innerHTML = '&#9881;';
+    settingsBtn.addEventListener('click', event => {
+      event.stopPropagation();
+      openFolderDrawer(folder.id);
+    });
+    card.appendChild(settingsBtn);
+    projectList.appendChild(card);
   });
 
-  projectList.innerHTML = "";
+  const projects = !showFolders
+    ? getProjects().slice()
+    : (inFolder ? getProjects().filter(p => (p.folderIds || []).includes(inFolder)) : []);
 
-  if (projects.length === 0) {
-    const t = translations[currentLang] || translations['zh'];
-    projectList.innerHTML = '<div style="padding: 20px; color: #999; text-align: center;">' + (t['empty-projects'] || '') + '</div>';
+  projects.sort((a, b) => {
+    const d = (b.importance || 0) - (a.importance || 0);
+    return d !== 0 ? d : (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+  });
+
+  if (!visibleFolders.length && !projects.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:20px;color:#999;text-align:center;';
+    empty.textContent = showFolders ? (t['empty-folders'] || t['folder-empty'] || 'No folders yet') : (t['empty-projects'] || '');
+    projectList.appendChild(empty);
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-
   projects.forEach(p => {
-    const div = document.createElement("div");
-    div.className = "card";
+    const div = document.createElement('div');
+    div.className = 'card';
     div.dataset.projectId = p.id;
-
-    const titleSpan = document.createElement("span");
-    titleSpan.className = "card-title";
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'card-title';
     titleSpan.innerText = p.title;
     div.appendChild(titleSpan);
-
-    const editedSpan = document.createElement("span");
-    editedSpan.className = "card-edited-time";
+    const editedSpan = document.createElement('span');
+    editedSpan.className = 'card-edited-time';
     const editedAt = p.updatedAt || p.createdAt;
-    editedSpan.innerText = editedAt
-      ? new Date(editedAt).toLocaleString(currentLang === 'zh' ? 'zh-CN' : 'en-US')
-      : '';
+    editedSpan.innerText = editedAt ? new Date(editedAt).toLocaleString(currentLang === 'zh' ? 'zh-CN' : 'en-US') : '';
     div.appendChild(editedSpan);
-
-    const settingsBtn = document.createElement("button");
-    settingsBtn.className = "card-settings-btn";
-    settingsBtn.innerHTML = "&#9881;";
-    settingsBtn.title = "Settings";
-    settingsBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openDrawer(p.id);
-    });
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'card-settings-btn';
+    settingsBtn.type = 'button';
+    settingsBtn.innerHTML = '&#9881;';
+    settingsBtn.addEventListener('click', e => { e.stopPropagation(); openDrawer(p.id); });
     div.appendChild(settingsBtn);
-
-    fragment.appendChild(div);
+    projectList.appendChild(div);
   });
-
-  projectList.appendChild(fragment);
 }
 
 // ===== 事件代理 =====
 projectList.addEventListener('click', (e) => {
   const card = e.target.closest('.card');
   if (!card) return;
+  if (card.dataset.folderId) {
+    Draft.folderId = card.dataset.folderId;
+    Draft.homeType = 'folders';
+    updateHomeControls();
+    renderProjects();
+    return;
+  }
 
   if (longPressTriggered) {
     longPressTriggered = false;
@@ -796,7 +937,8 @@ projectList.addEventListener('touchstart', (e) => {
 
   pressTimer = setTimeout(() => {
     longPressTriggered = true;
-    openPinModal(card.dataset.projectId);
+    if (card.dataset.folderId) openPinModal(card.dataset.folderId, 'folder');
+    else openPinModal(card.dataset.projectId, 'draft');
   }, 600);
 }, { passive: true });
 
@@ -828,10 +970,94 @@ projectList.addEventListener('contextmenu', (e) => {
     return;
   }
 
-  openPinModal(card.dataset.projectId);
+  if (card.dataset.folderId) openPinModal(card.dataset.folderId, 'folder');
+  else openPinModal(card.dataset.projectId, 'draft');
 });
 
 // ===== 创建新项目 =====
+function tKey(key, fallback) {
+  const t = translations[currentLang] || translations.en || {};
+  return t[key] || fallback;
+}
+
+function updateHomeControls() {
+  const path = document.getElementById('homePath');
+  const draftActions = document.getElementById('draftActions');
+  const folderActions = document.getElementById('folderActions');
+  const showFolders = Draft.homeType === 'folders';
+  if (path) {
+    path.textContent = showFolders
+      ? (Draft.folderId ? folderPath(Draft.folderId) : tKey('label-folders', 'Folders'))
+      : tKey('label-home', 'Drafts');
+  }
+  if (draftActions) draftActions.classList.toggle('hidden', showFolders);
+  if (folderActions) folderActions.classList.toggle('hidden', !showFolders);
+  syncTabs();
+}
+
+function showDraftHome() {
+  Draft.homeType = 'drafts';
+  Draft.folderId = null;
+  Draft.mode = 'home';
+  updateHomeControls();
+  renderProjects();
+}
+
+function showFolderHome() {
+  Draft.homeType = 'folders';
+  Draft.folderId = null;
+  Draft.mode = 'home';
+  updateHomeControls();
+  renderProjects();
+}
+
+function openNameModal(mode, titleKey, initialValue) {
+  Draft.nameModalMode = mode;
+  const modal = document.getElementById('nameModal');
+  const title = document.getElementById('nameModalTitle');
+  const input = document.getElementById('nameModalInput');
+  if (!modal || !input) return;
+  if (title) title.textContent = tKey(titleKey, 'Name folder');
+  input.value = initialValue || '';
+  modal.classList.add('show');
+  setTimeout(() => input.focus(), 0);
+}
+
+function closeNameModal() {
+  const modal = document.getElementById('nameModal');
+  if (modal) modal.classList.remove('show');
+  Draft.nameModalMode = null;
+}
+
+function saveNameModal() {
+  const input = document.getElementById('nameModalInput');
+  const name = input ? input.value.trim() : '';
+  if (!name) return;
+  if (Draft.nameModalMode === 'create-folder') {
+    const now = Date.now();
+    const folders = getFolders();
+    folders.push({
+      id: now + '-' + Math.random().toString(36).slice(2, 8),
+      title: name,
+      parentId: Draft.homeType === 'folders' ? (Draft.folderId || null) : null,
+      importance: 0,
+      createdAt: now,
+      updatedAt: now
+    });
+    saveFolders(folders);
+    Draft.homeType = 'folders';
+    closeNameModal();
+    updateHomeControls();
+    renderProjects();
+    return;
+  }
+  closeNameModal();
+}
+
+function createFolder() {
+  openNameModal('create-folder', 'folder-name-title', '');
+}
+
 function createProject() {
   const projects = getProjects();
   const t = translations[currentLang] || translations['zh'];
@@ -848,7 +1074,8 @@ function createProject() {
     fontStack: ['Noto Serif HK', 'Cardo'],
     fontSize: 10,
     lastOpenedAt: null,
-    annotations: []
+    annotations: [],
+    folderIds: Draft.folderId ? [Draft.folderId] : []
   };
 
   projects.push(p);
@@ -856,11 +1083,17 @@ function createProject() {
   renderProjects();
 }
 
-function openPinModal(projectId) {
-  const p = getProject(projectId);
-  if (!p) return;
-  pinProjectId = projectId;
-  document.getElementById('pinImportance').value = p.importance || 0;
+function openPinModal(id, kind) {
+  const isFolder = kind === 'folder' || (Boolean(getFolder(id)) && !getProject(id));
+  const folder = isFolder ? getFolder(id) : null;
+  const project = !isFolder ? getProject(id) : null;
+  if (!folder && !project) return;
+  pinProjectId = isFolder ? ('folder:' + id) : id;
+  const titleEl = document.querySelector('#pinModal [data-i18n="pin-title"]');
+  if (titleEl) {
+    titleEl.textContent = isFolder ? tKey('pin-folder-title', 'Pin this folder?') : tKey('pin-title', 'Pin this draft?');
+  }
+  document.getElementById('pinImportance').value = (folder || project).importance || 0;
   document.getElementById('importanceHint').classList.remove('show');
   document.getElementById('pinModal').classList.add('show');
 }
@@ -887,6 +1120,21 @@ function closeRenameModal() {
 
 function saveRename() {
   if (!renameProjectId) return;
+  if (String(renameProjectId).startsWith('folder:')) {
+    const folderId = String(renameProjectId).slice(7);
+    const name = document.getElementById('renameInput').value.trim();
+    const folders = getFolders();
+    const folder = folders.find(item => item.id === folderId);
+    if (!folder || !name) return;
+    folder.title = name;
+    folder.updatedAt = Date.now();
+    saveFolders(folders);
+    closeRenameModal();
+    closeDrawer();
+    updateHomeControls();
+    renderProjects();
+    return;
+  }
   const p = getProject(renameProjectId);
   const name = document.getElementById('renameInput').value.trim();
   if (!p || !name) return;
@@ -903,11 +1151,24 @@ function saveRename() {
 
 function savePin() {
   if (!pinProjectId) return;
+  const value = parseInt(document.getElementById('pinImportance').value, 10);
+  const importance = isNaN(value) ? 0 : Math.max(0, Math.min(99, value));
+  if (String(pinProjectId).startsWith('folder:')) {
+    const folderId = String(pinProjectId).slice(7);
+    const folders = getFolders();
+    const folder = folders.find(item => item.id === folderId);
+    if (!folder) return;
+    folder.importance = importance;
+    folder.updatedAt = Date.now();
+    saveFolders(folders);
+    closePinModal();
+    renderProjects();
+    return;
+  }
   const projects = getProjects();
   const p = projects.find(x => x.id === pinProjectId);
   if (!p) return;
-  const value = parseInt(document.getElementById('pinImportance').value, 10);
-  p.importance = isNaN(value) ? 0 : Math.max(0, Math.min(99, value));
+  p.importance = importance;
   p.updatedAt = Date.now();
   saveProjects(projects);
   closePinModal();
@@ -1088,24 +1349,45 @@ function closeAnnotationPage() {
 }
 
 // ===== 页面加载时先渲染一次列表 =====
+updateHomeControls();
 renderProjects();
 
 // ===== 同步 mode-tab 高亮状态 =====
 function syncTabs() {
   const tabs = document.querySelectorAll('.mode-tab');
-  const t = translations[currentLang] || translations['zh'];
-
-  tabs[0].classList.toggle('active', Draft.mode === "home");
-  tabs[1].classList.toggle('active', Draft.mode !== "home");
-  tabs[1].classList.toggle('hidden', Draft.mode === "home");
-
-  if (Draft.mode === "view") {
-    tabs[1].textContent = t['tab-editor'] || 'Edit';
-  } else if (Draft.mode === "edit") {
-    tabs[1].textContent = t['tab-view'] || 'View';
-  } else {
-    tabs[1].textContent = t['tab-editor'] || 'Edit';
+  if (!tabs.length) return;
+  const t = translations[currentLang] || translations.en || {};
+  const onHome = Draft.mode === 'home';
+  const inFolderMode = onHome && Draft.homeType === 'folders';
+  tabs[0].classList.toggle('active', onHome);
+  if (tabs[1]) {
+    tabs[1].classList.toggle('active', !onHome);
+    tabs[1].classList.toggle('hidden', onHome);
   }
+  tabs[0].textContent = inFolderMode ? (t['btn-back'] || 'Back') : (t['tab-home'] || 'Home');
+  if (!tabs[1]) return;
+  if (Draft.mode === 'view') tabs[1].textContent = t['tab-editor'] || 'Edit';
+  else if (Draft.mode === 'edit') tabs[1].textContent = t['tab-view'] || 'View';
+  else tabs[1].textContent = t['tab-editor'] || 'Edit';
+}
+
+function handleHomeTabClick() {
+  if (Draft.mode !== 'home') {
+    goHome();
+    return;
+  }
+  if (Draft.homeType === 'folders') {
+    if (Draft.folderId) {
+      const current = getFolder(Draft.folderId);
+      Draft.folderId = current && current.parentId ? current.parentId : null;
+      updateHomeControls();
+      renderProjects();
+      return;
+    }
+    showDraftHome();
+    return;
+  }
+  showDraftHome();
 }
 
 // ===== 打开项目 =====
@@ -1860,6 +2142,18 @@ function handleAndroidBackButton() {
     closeRenameModal();
     return true;
   }
+  if (isShown(document.getElementById('nameModal'))) {
+    closeNameModal();
+    return true;
+  }
+  if (isShown(document.getElementById('folderDeleteModal'))) {
+    closeFolderDeleteModal();
+    return true;
+  }
+  if (Draft.mode === 'home' && Draft.homeType === 'folders') {
+    handleHomeTabClick();
+    return true;
+  }
 
   if (isShown(document.getElementById('projectDrawer'))) {
     closeDrawer();
@@ -1929,20 +2223,20 @@ function setupAndroidBackButton() {
 // ===== 返回首页 =====
 function goHome() {
   Draft.currentProjectId = null;
-  Draft.mode = "home";
+  Draft.mode = 'home';
   Draft.dirty = false;
+  Draft.homeType = 'drafts';
+  Draft.folderId = null;
   savedEditorSelection = null;
   hideSelectionToolbar();
   document.body.classList.remove('edit-page');
-  toolFloatButton.classList.remove('visible');
-  toolPalette.classList.remove('show');
-
+  if (toolFloatButton) toolFloatButton.classList.remove('visible');
+  if (toolPalette) toolPalette.classList.remove('show');
   closeFloatingPanels();
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.getElementById('homeView').classList.add('active');
-
-  titleInput.value = "";
-
+  if (titleInput) titleInput.value = '';
+  updateHomeControls();
   syncTabs();
   renderProjects();
 }
@@ -2050,42 +2344,142 @@ themeBtn.addEventListener('click', toggleTheme);
 // ========== 模式切换 ==========
 document.querySelectorAll('.mode-tab').forEach((tab, index) => {
   tab.addEventListener('click', () => {
-
     if (index === 0) {
-      goHome();
-      Draft.mode = "home";
+      handleHomeTabClick();
+      return;
     }
-
     if (index === 1) {
       if (!Draft.currentProjectId) {
         showAlert('alert-select-project');
         return;
       }
-
-      if (Draft.mode === "view") {
-        enterEditMode();
-      } else {
-        enterViewMode();
-      }
+      if (Draft.mode === 'view') enterEditMode();
+      else enterViewMode();
+      syncTabs();
     }
-
-    syncTabs();
   });
 });
 
 // ===== 抽屉面板 =====
+function hideDrawerMenus() {
+  document.querySelectorAll('#projectDrawer .export-options').forEach(el => {
+    if (el.id === 'folderManageList') return;
+    el.classList.remove('show');
+  });
+  const wrap = document.getElementById('folderManageListWrap');
+  if (wrap) wrap.classList.add('hidden');
+}
+
+function renderFolderPicker(item, isFolder) {
+  if (isFolder === void 0) isFolder = false;
+  const picker = document.getElementById('folderPicker');
+  if (!picker) return;
+  picker.innerHTML = '';
+  picker.classList.remove('show');
+  const folders = getFolders();
+  const blocked = new Set();
+  if (isFolder) {
+    blocked.add(item.id);
+    descendants(item.id).forEach(id => blocked.add(id));
+  }
+  const candidates = folders.filter(folder => !blocked.has(folder.id))
+    .sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id)));
+  if (!candidates.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
+    empty.textContent = tKey('empty-folders', 'No folders yet');
+    picker.appendChild(empty);
+    return;
+  }
+  candidates.forEach(folder => {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = isFolder ? item.parentId === folder.id : (item.folderIds || []).includes(folder.id);
+    checkbox.addEventListener('change', () => {
+      if (isFolder) {
+        const foldersNow = getFolders();
+        const current = foldersNow.find(entry => entry.id === item.id);
+        if (!current) return;
+        if (checkbox.checked) {
+          current.parentId = folder.id;
+          picker.querySelectorAll('input[type="checkbox"]').forEach(other => {
+            if (other !== checkbox) other.checked = false;
+          });
+        } else if (current.parentId === folder.id) {
+          current.parentId = null;
+        }
+        current.updatedAt = Date.now();
+        saveFolders(foldersNow);
+        item.parentId = current.parentId;
+      } else {
+        const projects = getProjects();
+        const current = projects.find(entry => entry.id === item.id);
+        if (!current) return;
+        const ids = new Set(current.folderIds || []);
+        if (checkbox.checked) ids.add(folder.id); else ids.delete(folder.id);
+        current.folderIds = Array.from(ids);
+        current.updatedAt = Date.now();
+        saveProjects(projects);
+        item.folderIds = current.folderIds;
+      }
+      renderProjects();
+      updateHomeControls();
+    });
+    const text = document.createElement('span');
+    text.textContent = folderPath(folder.id) || folder.title;
+    label.appendChild(checkbox);
+    label.appendChild(text);
+    picker.appendChild(label);
+  });
+}
+
+function openFolderDrawer(folderId) {
+  const folder = getFolder(folderId);
+  if (!folder) return;
+  Draft.drawerFolderId = folderId;
+  Draft.drawerProjectId = null;
+  hideDrawerMenus();
+  const t = translations[currentLang] || translations.en || {};
+  document.getElementById('drawerTitle').textContent = (t['drawer-folder-title'] || 'Folder Settings') + ' — ' + folder.title;
+  const exportBtn = document.getElementById('drawerExport');
+  const exportWrap = exportBtn && exportBtn.closest('.export-wrap');
+  if (exportWrap) exportWrap.classList.add('hidden');
+  const addWrap = document.getElementById('folderAddWrap');
+  const manageWrap = document.getElementById('folderManageWrap');
+  const manageListWrap = document.getElementById('folderManageListWrap');
+  if (addWrap) addWrap.classList.remove('hidden');
+  if (manageWrap) manageWrap.classList.remove('hidden');
+  if (manageListWrap) manageListWrap.classList.add('hidden');
+  document.getElementById('drawerRename').dataset.folder = '1';
+  renderFolderPicker(folder, true);
+  document.getElementById('projectDrawer').classList.add('show');
+  document.getElementById('drawerOverlay').classList.add('show');
+}
+
 function openDrawer(projectId) {
   const p = getProject(projectId);
   if (!p) return;
-
   Draft.drawerProjectId = projectId;
-
+  Draft.drawerFolderId = null;
+  hideDrawerMenus();
   const drawer = document.getElementById('projectDrawer');
   const overlay = document.getElementById('drawerOverlay');
   const titleEl = document.getElementById('drawerTitle');
-
-  const t = translations[currentLang] || translations['zh'];
-  titleEl.textContent = (t['drawer-title'] || 'Draft Settings') + ' \u2014 ' + p.title;
+  const t = translations[currentLang] || translations.zh;
+  titleEl.textContent = (t['drawer-title'] || 'Draft Settings') + ' — ' + p.title;
+  const exportBtn = document.getElementById('drawerExport');
+  const exportWrap = exportBtn && exportBtn.closest('.export-wrap');
+  if (exportWrap) exportWrap.classList.remove('hidden');
+  if (exportBtn) exportBtn.classList.remove('hidden');
+  const addWrap = document.getElementById('folderAddWrap');
+  const manageWrap = document.getElementById('folderManageWrap');
+  const manageListWrap = document.getElementById('folderManageListWrap');
+  if (addWrap) addWrap.classList.remove('hidden');
+  if (manageWrap) manageWrap.classList.add('hidden');
+  if (manageListWrap) manageListWrap.classList.add('hidden');
+  document.getElementById('drawerRename').dataset.folder = '0';
+  renderFolderPicker(p, false);
   drawer.classList.add('show');
   overlay.classList.add('show');
 }
@@ -2093,9 +2487,56 @@ function openDrawer(projectId) {
 function closeDrawer() {
   const drawer = document.getElementById('projectDrawer');
   const overlay = document.getElementById('drawerOverlay');
-  drawer.classList.remove('show');
-  overlay.classList.remove('show');
+  if (drawer) drawer.classList.remove('show');
+  if (overlay) overlay.classList.remove('show');
   Draft.drawerProjectId = null;
+  Draft.drawerFolderId = null;
+  hideDrawerMenus();
+}
+
+function renderManageDraftList(mode) {
+  const folderId = Draft.drawerFolderId;
+  if (!folderId) return;
+  const listWrap = document.getElementById('folderManageListWrap');
+  const list = document.getElementById('folderManageList');
+  if (!listWrap || !list) return;
+  list.innerHTML = '';
+  const projects = getProjects().slice().sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+  const rows = mode === 'remove' ? projects.filter(project => (project.folderIds || []).includes(folderId)) : projects;
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
+    empty.textContent = tKey('empty-projects', 'No drafts yet');
+    list.appendChild(empty);
+  } else {
+    rows.forEach(project => {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = mode === 'remove' ? true : (project.folderIds || []).includes(folderId);
+      checkbox.addEventListener('change', () => {
+        const all = getProjects();
+        const current = all.find(entry => entry.id === project.id);
+        if (!current) return;
+        const ids = new Set(current.folderIds || []);
+        if (checkbox.checked) ids.add(folderId); else ids.delete(folderId);
+        current.folderIds = Array.from(ids);
+        current.updatedAt = Date.now();
+        saveProjects(all);
+        renderProjects();
+        if (mode === 'remove' && !checkbox.checked) label.remove();
+      });
+      const text = document.createElement('span');
+      text.textContent = project.title || tKey('placeholder-title', 'Untitled');
+      label.appendChild(checkbox);
+      label.appendChild(text);
+      list.appendChild(label);
+    });
+  }
+  const manageOptions = document.getElementById('folderManageOptions');
+  if (manageOptions) manageOptions.classList.remove('show');
+  listWrap.classList.remove('hidden');
+  list.classList.add('show');
 }
 
 function saveDrawerSettings() {
@@ -2120,9 +2561,11 @@ document.addEventListener('DOMContentLoaded', function() {
   const renameCancel = document.getElementById('renameCancel');
   const renameSaveBtn = document.getElementById('renameSave');
   const importanceHelp = document.getElementById('importanceHelp');
-  const drawerRename = document.getElementById('drawerRename');
   const drawerDelete = document.getElementById('drawerDelete');
   const drawerExport = document.getElementById('drawerExport');
+  const drawerAddFolder = document.getElementById('drawerAddFolder');
+  const drawerManage = document.getElementById('drawerManage');
+  const drawerRename = document.getElementById('drawerRename');
   const exportOptions = document.getElementById('exportOptions');
   const editorSettingsBtn = document.getElementById('editorSettingsBtn');
   const editorSettingsClose = document.getElementById('editorSettingsClose');
@@ -2401,14 +2844,64 @@ document.addEventListener('DOMContentLoaded', function() {
     clearTimeout(importanceHintTimer);
     importanceHintTimer = setTimeout(() => hint.classList.remove('show'), 2500);
   });
+  if (drawerAddFolder) drawerAddFolder.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const manage = document.getElementById('folderManageOptions');
+    if (manage) manage.classList.remove('show');
+    const listWrap = document.getElementById('folderManageListWrap');
+    if (listWrap) listWrap.classList.add('hidden');
+    const picker = document.getElementById('folderPicker');
+    if (picker) picker.classList.toggle('show');
+  });
+  if (drawerManage) drawerManage.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const picker = document.getElementById('folderPicker');
+    if (picker) picker.classList.remove('show');
+    const listWrap = document.getElementById('folderManageListWrap');
+    if (listWrap) listWrap.classList.add('hidden');
+    const manage = document.getElementById('folderManageOptions');
+    if (manage) manage.classList.toggle('show');
+  });
+  const manageRemove = document.getElementById('manageRemoveDrafts');
+  const manageAdd = document.getElementById('manageAddDrafts');
+  if (manageRemove) manageRemove.addEventListener('click', (e) => { e.stopPropagation(); renderManageDraftList('remove'); });
+  if (manageAdd) manageAdd.addEventListener('click', (e) => { e.stopPropagation(); renderManageDraftList('add'); });
   if (drawerRename) drawerRename.addEventListener('click', () => {
-    openRenameModal(Draft.drawerProjectId);
+    if (Draft.drawerFolderId) {
+      const folder = getFolder(Draft.drawerFolderId);
+      if (!folder) return;
+      renameProjectId = 'folder:' + folder.id;
+      document.getElementById('renameInput').value = folder.title;
+      document.getElementById('renameModal').classList.add('show');
+    } else openRenameModal(Draft.drawerProjectId);
   });
   if (drawerDelete) drawerDelete.addEventListener('click', () => {
-    // Capture the target before closing clears the drawer's selection.
+    const folderId = Draft.drawerFolderId;
     const id = Draft.drawerProjectId;
     closeDrawer();
-    if (id) handleProjectDelete(id);
+    if (folderId) openFolderDeleteModal(folderId);
+    else if (id) handleProjectDelete(id);
+  });
+  const folderDeleteCancel = document.getElementById('folderDeleteCancel');
+  const folderDeleteOk = document.getElementById('folderDeleteOk');
+  if (folderDeleteCancel) folderDeleteCancel.addEventListener('click', closeFolderDeleteModal);
+  if (folderDeleteOk) folderDeleteOk.addEventListener('click', () => {
+    if (Draft.deleteFolderId) {
+      deleteFolder(
+        Draft.deleteFolderId,
+        document.getElementById('deleteIncludingDrafts').checked,
+        document.getElementById('deleteIncludingFolders').checked
+      );
+    }
+    closeFolderDeleteModal();
+  });
+  const nameModalCancel = document.getElementById('nameModalCancel');
+  const nameModalSave = document.getElementById('nameModalSave');
+  const nameModalInput = document.getElementById('nameModalInput');
+  if (nameModalCancel) nameModalCancel.addEventListener('click', closeNameModal);
+  if (nameModalSave) nameModalSave.addEventListener('click', saveNameModal);
+  if (nameModalInput) nameModalInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveNameModal(); }
   });
   if (drawerExport) drawerExport.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2427,7 +2920,12 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.export-wrap')) {
-      document.querySelectorAll('.export-options').forEach(options => options.classList.remove('show'));
+      document.querySelectorAll('.export-options').forEach(options => {
+        if (options.id === 'folderManageList') return;
+        options.classList.remove('show');
+      });
+      const listWrap = document.getElementById('folderManageListWrap');
+      if (listWrap) listWrap.classList.add('hidden');
     }
   });
 });

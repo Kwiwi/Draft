@@ -34,7 +34,9 @@ else
 fi
 
 B64="$(base64 -w0 "$KS" 2>/dev/null || base64 "$KS" | tr -d '\n')"
-META="${OUT_DIR}/github-secrets.txt"
+# Secrets text goes OUTSIDE the repo by default; override with DRAFT_SECRETS_FILE.
+META="${DRAFT_SECRETS_FILE:-$HOME/.draft-signing/github-secrets.txt}"
+mkdir -p "$(dirname "$META")"
 {
   echo "# Paste these into GitHub → Settings → Secrets and variables → Actions"
   echo "# Repo secrets (names must match exactly):"

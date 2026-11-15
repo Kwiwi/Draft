@@ -69,7 +69,9 @@ debug keystore in **GitHub Actions secrets**.
 ```bash
 chmod +x scripts/generate-debug-keystore.sh
 ./scripts/generate-debug-keystore.sh
-# Secrets text is written to .signing/github-secrets.txt (gitignored)
+# Secrets text is written OUTSIDE the repo:
+#   ~/.draft-signing/github-secrets.txt   (override with DRAFT_SECRETS_FILE=...)
+# Keystore itself stays at .signing/draft-debug.keystore (gitignored).
 ```
 
 Then in GitHub → **Settings → Secrets and variables → Actions**, create:
@@ -94,7 +96,9 @@ gh secret set DRAFT_DEBUG_KEY_PASSWORD --body 'draft-debug'
 
 - **First** time switching to this key: still **uninstall once** (old random CI signature ≠ new one).
 - **Later** builds with the same secrets: install over the top; no uninstall.
-- Never commit `.signing/` or `*.keystore`. This key is for **sideload/debug only**, not Play Store.
+- Never commit `.signing/` or `*.keystore`, and keep `github-secrets.txt` (store/key
+  passwords) outside the repo — it holds the debug signing passwords in plaintext.
+  This key is for **sideload/debug only**, not Play Store.
 ## Requirements (local Android build)
 
 - Node.js 22+
