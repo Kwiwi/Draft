@@ -58,13 +58,12 @@
     <div class="home-heading">
       <div class="label" id="homePath">Drafts</div>
       <div class="home-actions">
-        <button class="btn" id="draftTabBtn" onclick="showDraftHome()" data-i18n="btn-drafts">Drafts</button>
-        <button class="btn" id="folderTabBtn" onclick="showFolderHome()" data-i18n="btn-folders">Folders</button>
+        <button class="home-tab is-active" id="draftTabBtn" onclick="showDraftHome()" data-i18n="btn-drafts">Drafts</button>
+        <button class="home-tab" id="folderTabBtn" onclick="showFolderHome()" data-i18n="btn-folders">Folders</button>
       </div>
     </div>
     <div id="draftActions" class="home-actions">
       <button class="btn" onclick="createProject()" data-i18n="btn-new">+ Draft</button>
-      <button class="btn" onclick="createFolder()" data-i18n="btn-folder">Folder</button>
     </div>
     <div id="folderActions" class="home-actions hidden">
       <button class="btn" onclick="createFolder()" data-i18n="btn-new-folder">+ New</button>

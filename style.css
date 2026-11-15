@@ -297,6 +297,40 @@ button:focus-visible,
   gap: 8px;
   margin: 8px 0 0;
 }
+
+/* Grey count line above the card list. */
+.project-summary {
+  margin: 10px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Drafts / Folders switch: plain text with an underline on the active one. */
+.home-tab {
+  padding: 2px 2px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.home-tab:hover {
+  opacity: .65;
+  transform: none;
+  background: transparent;
+  color: var(--color-text-strong);
+}
+
+.home-tab.is-active {
+  border-bottom-color: var(--color-text-strong);
+  color: var(--color-text-strong);
+}
 .home-actions.hidden,
 .hidden { display: none !important; }
 .folder-count {
@@ -355,6 +389,10 @@ button:focus-visible,
   top: 0;
   display: block;
   margin-top: 8px;
+  /* Manage lists (remove/add drafts) flow with the drawer instead of
+     scrolling inside a fixed-height box. */
+  max-height: none;
+  overflow: visible;
 }
 
 #projectList {

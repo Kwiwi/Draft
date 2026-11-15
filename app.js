@@ -825,12 +825,39 @@ let touchStartY = 0;
 const MOVE_THRESHOLD = 10;
 
 // ===== 渲染项目列表 =====
+function isFiledInFolder(project) {
+  return (project && project.folderIds ? project.folderIds.length : 0) > 0;
+}
+
+function draftStatText(count, inFolder) {
+  if (inFolder) {
+    const key = count === 1 ? 'folder-draft-count-one' : 'folder-draft-count';
+    return tKey(key, '{n} drafts in this folder').replace('{n}', String(count));
+  }
+  const key = count === 1 ? 'filed-count-one' : 'filed-count';
+  return tKey(key, '{n} drafts in folders').replace('{n}', String(count));
+}
+
 function renderProjects() {
   const t = translations[currentLang] || translations.en || {};
   const folders = getFolders();
   const inFolder = Draft.folderId;
   const showFolders = Draft.homeType === 'folders';
   projectList.innerHTML = '';
+
+  // Filed drafts live under their folders, so the drafts home only lists the rest.
+  const allProjects = getProjects();
+  const unfiledProjects = allProjects.filter(project => !isFiledInFolder(project));
+  const statCount = inFolder
+    ? allProjects.filter(project => (project.folderIds || []).includes(inFolder)).length
+    : allProjects.filter(isFiledInFolder).length;
+
+  if (!showFolders || inFolder) {
+    const summary = document.createElement('div');
+    summary.className = 'project-summary';
+    summary.textContent = draftStatText(statCount, Boolean(inFolder));
+    projectList.appendChild(summary);
+  }
 
   const visibleFolders = showFolders
     ? folders.filter(folder => (folder.parentId || null) === (inFolder || null))
@@ -869,8 +896,8 @@ function renderProjects() {
   });
 
   const projects = !showFolders
-    ? getProjects().slice()
-    : (inFolder ? getProjects().filter(p => (p.folderIds || []).includes(inFolder)) : []);
+    ? unfiledProjects
+    : (inFolder ? allProjects.filter(p => (p.folderIds || []).includes(inFolder)) : []);
 
   projects.sort((a, b) => {
     const d = (b.importance || 0) - (a.importance || 0);
@@ -880,7 +907,14 @@ function renderProjects() {
   if (!visibleFolders.length && !projects.length) {
     const empty = document.createElement('div');
     empty.style.cssText = 'padding:20px;color:#999;text-align:center;';
-    empty.textContent = showFolders ? (t['empty-folders'] || t['folder-empty'] || 'No folders yet') : (t['empty-projects'] || '');
+    if (showFolders) {
+      empty.textContent = t['empty-folders'] || t['folder-empty'] || 'No folders yet';
+    } else {
+      // The leftovers are empty but some drafts may be sitting in folders.
+      empty.textContent = statCount > 0
+        ? tKey('empty-projects-filed', 'Nothing left here — see Folders')
+        : (t['empty-projects'] || '');
+    }
     projectList.appendChild(empty);
     return;
   }
@@ -984,6 +1018,8 @@ function updateHomeControls() {
   const path = document.getElementById('homePath');
   const draftActions = document.getElementById('draftActions');
   const folderActions = document.getElementById('folderActions');
+  const draftTab = document.getElementById('draftTabBtn');
+  const folderTab = document.getElementById('folderTabBtn');
   const showFolders = Draft.homeType === 'folders';
   if (path) {
     path.textContent = showFolders
@@ -992,6 +1028,9 @@ function updateHomeControls() {
   }
   if (draftActions) draftActions.classList.toggle('hidden', showFolders);
   if (folderActions) folderActions.classList.toggle('hidden', !showFolders);
+  // Underlined-tab look: the active section also gets the underline.
+  if (draftTab) draftTab.classList.toggle('is-active', !showFolders);
+  if (folderTab) folderTab.classList.toggle('is-active', showFolders);
   syncTabs();
 }
 
