@@ -119,7 +119,7 @@ jobs:
           if [ "${{ matrix.edition }}" = "offline" ]; then
             DEST="android/app/src/main/java/$(echo "${{ matrix.slug }}" | tr . /)"
             mkdir -p "$DEST"
-            cp android-plugin/PrintPlugin.kt "$DEST/"
+            cp android-plugin/PrintPlugin.java "$DEST/"
             ls -l "$DEST"
           else
             echo "No native plugins for the ${{ matrix.edition }} edition."
@@ -163,6 +163,16 @@ jobs:
           fi
           echo "Signing snippet attached."
 
+      # A .kt file would be silently ignored by this Java-only template, so
+      # fail loudly if the plugin did not make it into the build.
+      - name: Verify native plugins are wired
+        if: steps.want.outputs.run == 'true' && matrix.edition == 'offline'
+        run: |
+          SRC="android/app/src/main/java/$(echo "${{ matrix.slug }}" | tr . /)/PrintPlugin.java"
+          test -f "$SRC" || { echo "::error::PrintPlugin.java missing from the Android project"; exit 1; }
+          grep -q 'class PrintPlugin' "$SRC" || { echo "::error::PrintPlugin.java looks wrong"; exit 1; }
+          echo "PrintPlugin.java present at $SRC"
+
       - name: Build debug APK
         if: steps.want.outputs.run == 'true'
         working-directory: android
@@ -177,6 +187,16 @@ jobs:
 
       # Unique filename avoids phone download managers blocking "same APK already downloaded".
       # Offline keeps the historic name so old links still resolve.
+      - name: Assert print plugin is inside the APK
+        if: steps.want.outputs.run == 'true' && matrix.edition == 'offline'
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          if ! unzip -p "$APK" 'classes*.dex' | grep -aq 'PrintPlugin'; then
+            echo "::error::PrintPlugin class not found in $APK (Kotlin/Java source not compiled)"
+            exit 1
+          fi
+          echo "PrintPlugin is compiled into the APK"
+
       - name: Package named APK
         if: steps.want.outputs.run == 'true'
         run: |

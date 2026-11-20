@@ -292,12 +292,12 @@ function installNativePlugins(names) {
   const appId = process.env.DRAFT_APP_ID || 'com.kwiwi.draft';
   // The Print plugin is only referenced by the offline (fully local) edition.
   if (!names.includes('local') && !names.includes('offline')) return;
-  const src = path.join(ROOT, 'android-plugin/PrintPlugin.kt');
+  const src = path.join(ROOT, 'android-plugin/PrintPlugin.java');
   const dest = path.join(androidDir, 'app/src/main/java', ...appId.split('.'));
   if (!fs.existsSync(src)) return;
   mkdirp(dest);
-  fs.copyFileSync(src, path.join(dest, 'PrintPlugin.kt'));
-  console.log(`  native plugin: PrintPlugin.kt → ${path.relative(ROOT, dest)}`);
+  fs.copyFileSync(src, path.join(dest, 'PrintPlugin.java'));
+  console.log(`  native plugin: PrintPlugin.java → ${path.relative(ROOT, dest)}`);
 }
 
 function main() {
