@@ -1,0 +1,8 @@
+{
+  "appId": "com.kwiwi.draft.cdnlocal",
+  "appName": "Draft CDN Local",
+  "webDir": "dist/cdn-local",
+  "server": {
+    "androidScheme": "https"
+  }
+}

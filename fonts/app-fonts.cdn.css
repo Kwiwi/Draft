@@ -1,0 +1,43 @@
+/* GENERATED from app-fonts.css — do not edit by hand.
+ * Regenerate with: node scripts/gen-cdn-fonts-css.js
+ * Used when a build ships Latin fonts only (CJK comes from Google Fonts). */
+
+@font-face {
+  font-family: 'Cardo';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(Cardo-Regular.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(SourceSerif4-Regular.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(SourceSerif4-Bold.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(SourceSerif4-Italic.ttf) format('truetype');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url(SourceSerif4-BoldItalic.ttf) format('truetype');
+}

@@ -21,6 +21,13 @@ function getAssetMode() {
 const KATEX_CDN_BASE = 'https://cdn.jsdelivr.net/npm/katex@0.19.1/dist';
 const GOOGLE_FONTS_CSS = 'https://fonts.googleapis.com/css2?family=Cardo:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,700;1,400&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Noto+Serif+HK:wght@400;700&family=Noto+Serif+SC:wght@400;700&family=Open+Sans:ital,wght@0,400;0,700;1,400&family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,700&display=swap';
 
+// True when Chinese fonts (Noto Serif HK / SC) are bundled in this package.
+// Builds that ship them set window.DRAFT_CJK_FONTS = 'local'.
+function hasLocalCjkFonts() {
+  const flag = (window.DRAFT_CJK_FONTS || (getAssetMode() === 'local' ? 'local' : 'cdn')).toLowerCase();
+  return flag === 'local';
+}
+
 function getDraftNative() {
   return window.DraftNative || null;
 }
@@ -1845,8 +1852,8 @@ const EXPORT_SYSTEM_FONT_FALLBACKS = {
 
 async function buildEmbeddedFontCss(project) {
   const family = getProjectFontFamily(project || {});
-  if (getAssetMode() === 'cdn') {
-    // CDN edition: rely on Google Fonts link in the export document head.
+  // CDN edition without bundled CJK fonts: let Google Fonts serve everything.
+  if (getAssetMode() === 'cdn' && !hasLocalCjkFonts()) {
     return { css: '', family, headLinks: [`<link rel="stylesheet" href="${GOOGLE_FONTS_CSS}">`] };
   }
 
@@ -1876,8 +1883,12 @@ async function buildEmbeddedFontCss(project) {
     }
   }
 
+  // Installed copies of the CJK families win over generic system fallbacks.
+  const embeddedNames = new Set(faces.map(face => (face.match(/font-family:'([^']+)'/) || [])[1]).filter(Boolean));
   const stackedFamily = familyNames
-    .flatMap(name => EXPORT_SYSTEM_FONT_FALLBACKS[name] || [`'${String(name).replace(/'/g, '')}'`])
+    .flatMap(name => (embeddedNames.has(name) ? [`'${String(name).replace(/'/g, '')}'`] : null)
+      || EXPORT_SYSTEM_FONT_FALLBACKS[name]
+      || [`'${String(name).replace(/'/g, '')}'`])
     .concat(['serif'])
     .filter((value, index, arr) => arr.indexOf(value) === index)
     .join(', ');

@@ -1,9 +1,23 @@
-name: Android APK
+name: Android APKs
+
+# One source tree → three sideload APKs, each with its own package id and its
+# own rolling release:
+#   Draft              (com.kwiwi.draft)            offline build, all fonts local
+#   Draft CDN          (com.kwiwi.draft.cdn)        light build, fonts via CDN
+#   Draft CDN Local    (com.kwiwi.draft.cdnlocal)   light build, CJK fonts local
+#
+# Note: only the `offline` variant keeps the historic apk filename/artifact
+# (Draft-debug-rN-sha / draft-debug-apk-rN) so existing download links keep working.
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      editions:
+        description: 'Editions to build: all | offline | cdn | cdn-local'
+        default: 'all'
+        required: false
 
 permissions:
   contents: write
@@ -11,11 +25,49 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - edition: offline
+            build: build:local
+            config: capacitor.config.json
+            apk_prefix: Draft
+            release_tag: debug-latest
+            release_title: Draft debug (latest)
+            slug: com.kwiwi.draft
+          - edition: cdn
+            build: build:cdn
+            config: capacitor.config.cdn.json
+            apk_prefix: Draft-CDN
+            release_tag: cdn-debug-latest
+            release_title: Draft CDN debug (latest)
+            slug: com.kwiwi.draft.cdn
+          - edition: cdn-local
+            build: build:cdn-local
+            config: capacitor.config.cdn-local.json
+            apk_prefix: Draft-CDN-Local
+            release_tag: cdn-local-debug-latest
+            release_title: Draft CDN Local debug (latest)
+            slug: com.kwiwi.draft.cdnlocal
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check edition selection
+        id: want
+        shell: bash
+        env:
+          SELECTION: ${{ github.event.inputs.editions || 'all' }}
+        run: |
+          if [[ "$SELECTION" == "all" || "$SELECTION" == "${{ matrix.edition }}" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node
+        if: steps.want.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -23,12 +75,14 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Java
+        if: steps.want.outputs.run == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
       - name: Accept Android licenses
+        if: steps.want.outputs.run == 'true'
         run: |
           mkdir -p "$ANDROID_HOME/licenses"
           echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$ANDROID_HOME/licenses/android-sdk-license"
@@ -36,31 +90,39 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install dependencies
+        if: steps.want.outputs.run == 'true'
         run: npm install
 
-      - name: Build web assets (offline local target)
-        run: npm run build:local
+      - name: Build web assets (${{ matrix.edition }})
+        if: steps.want.outputs.run == 'true'
+        run: npm run ${{ matrix.build }}
 
       - name: Add Capacitor Android platform
-        run: npx cap add android
+        if: steps.want.outputs.run == 'true'
+        run: npx cap add android --config "${{ matrix.config }}"
 
       - name: Sync web assets into Android project
-        run: npx cap sync android
+        if: steps.want.outputs.run == 'true'
+        run: npx cap sync android --config "${{ matrix.config }}"
 
       - name: Generate launcher icons
+        if: steps.want.outputs.run == 'true'
         run: npx capacitor-assets generate --android --assetPath resources
 
       # Unique versionCode helps installers treat this as a newer package.
       - name: Stamp CI versionCode / versionName
+        if: steps.want.outputs.run == 'true'
         run: |
           GRADLE="android/app/build.gradle"
           test -f "$GRADLE"
           sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${{ github.run_number }}/" "$GRADLE"
           sed -i -E "s/versionName[[:space:]]+\"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" "$GRADLE"
-          grep -E "versionCode|versionName" "$GRADLE" | head -5
+          grep -E "versionCode|versionName|applicationId" "$GRADLE" | head -5
 
       # Fixed debug keystore → install over previous CI builds without uninstall.
+      # The same key signs all editions; Android keeps them apart by package id.
       - name: Install stable debug keystore
+        if: steps.want.outputs.run == 'true'
         env:
           DRAFT_DEBUG_KEYSTORE_BASE64: ${{ secrets.DRAFT_DEBUG_KEYSTORE_BASE64 }}
         run: |
@@ -78,6 +140,7 @@ jobs:
           echo "Signing snippet attached."
 
       - name: Build debug APK
+        if: steps.want.outputs.run == 'true'
         working-directory: android
         env:
           DRAFT_DEBUG_KEYSTORE_PATH: ci-debug.keystore
@@ -89,34 +152,47 @@ jobs:
           ./gradlew assembleDebug --no-daemon
 
       # Unique filename avoids phone download managers blocking "same APK already downloaded".
+      # Offline keeps the historic name so old links still resolve.
       - name: Package named APK
+        if: steps.want.outputs.run == 'true'
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          OUT="Draft-debug-r${{ github.run_number }}-${SHORT_SHA}.apk"
-          mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/${OUT}"
-          ls -la dist/
+          RUN="${{ github.run_number }}"
+          if [[ "${{ matrix.edition }}" == "offline" ]]; then
+            OUT="Draft-debug-r${RUN}-${SHORT_SHA}.apk"
+          else
+            OUT="${{ matrix.apk_prefix }}-debug-r${RUN}-${SHORT_SHA}.apk"
+          fi
+          mkdir -p "dist/${{ matrix.edition }}"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/${{ matrix.edition }}/${OUT}"
+          ls -la "dist/${{ matrix.edition }}/"
           echo "APK_NAME=${OUT}" >> "$GITHUB_ENV"
 
       - name: Upload APK
+        if: steps.want.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: draft-debug-apk-r${{ github.run_number }}
-          path: dist/*.apk
+          name: draft-debug-apk-${{ matrix.edition }}-r${{ github.run_number }}
+          path: dist/${{ matrix.edition }}/*.apk
           if-no-files-found: error
 
-      # Public download target for site link: https://github.com/Kwiwi/Draft/releases/latest
+      # Public download target for site links:
+      # https://github.com/Kwiwi/Draft/releases/latest               (offline)
+      # https://github.com/Kwiwi/Draft/releases/tag/cdn-debug-latest (CDN)
+      # https://github.com/Kwiwi/Draft/releases/tag/cdn-local-debug-latest
       - name: Publish rolling debug release
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: steps.want.outputs.run == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="debug-latest"
-          TITLE="Draft debug (latest)"
-          NOTES="Sideload debug APK from CI run ${{ github.run_number }} (${GITHUB_SHA:0:7}). Same stable debug signature — install over previous debug builds. Not for Play Store."
-          # Keep a single moving "latest" debug tag for the site download link.
+          TAG="${{ matrix.release_tag }}"
+          TITLE="${{ matrix.release_title }}"
+          NOTES="${{ matrix.edition }} debug APK from CI run ${{ github.run_number }} (${GITHUB_SHA:0:7}). Package: ${{ matrix.slug }}. Same stable debug signature — installs over previous debug builds of the same edition. Not for Play Store."
+          # Keep a single moving "latest" debug tag per edition.
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" dist/*.apk \
+          LATEST_FLAG=""
+          if [[ "${{ matrix.edition }}" == "offline" ]]; then LATEST_FLAG="--latest"; fi
+          gh release create "$TAG" dist/${{ matrix.edition }}/*.apk \
             --title "$TITLE" \
             --notes "$NOTES" \
-            --latest
+            $LATEST_FLAG
