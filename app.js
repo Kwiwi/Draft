@@ -743,14 +743,31 @@ function deleteProject(id) {
 }
 
 // ===== 自定义确认弹窗 =====
-function showConfirm(messageKey, onConfirm) {
+// options (all optional, existing calls unaffected):
+//   title       – heading text (the modal only shows the message by default)
+//   confirmText – label for the OK button (defaults to the i18n "确定")
+//   cancelText  – label for the cancel button
+//   onDismiss   – called when the user cancels
+function showConfirm(messageKey, onConfirm, options = {}) {
   const modal = document.getElementById('confirmModal');
   const text = document.getElementById('confirmText');
   const okBtn = document.getElementById('confirmOk');
   const cancelBtn = document.getElementById('confirmCancel');
 
   const t = translations[currentLang] || translations['zh'];
+  const defaultOk = okBtn.textContent;
+  const defaultCancel = cancelBtn.textContent;
+  // Plain text by default; a title (if given) becomes its own bold line.
   text.textContent = t[messageKey] || messageKey;
+  if (options.title) {
+    const heading = document.createElement('strong');
+    heading.textContent = options.title;
+    heading.style.display = 'block';
+    heading.style.marginBottom = '8px';
+    text.insertBefore(heading, text.firstChild);
+  }
+  okBtn.textContent = options.confirmText || t['btn-ok'] || defaultOk;
+  cancelBtn.textContent = options.cancelText || t['btn-cancel'] || defaultCancel;
 
   modal.classList.add('show');
 
@@ -758,6 +775,8 @@ function showConfirm(messageKey, onConfirm) {
     modal.classList.remove('show');
     okBtn.onclick = null;
     cancelBtn.onclick = null;
+    okBtn.textContent = defaultOk;
+    cancelBtn.textContent = defaultCancel;
   }
 
   okBtn.onclick = () => {
@@ -765,7 +784,10 @@ function showConfirm(messageKey, onConfirm) {
     onConfirm();
   };
 
-  cancelBtn.onclick = cleanup;
+  cancelBtn.onclick = () => {
+    cleanup();
+    if (typeof options.onDismiss === 'function') options.onDismiss();
+  };
 }
 
 // ===== 公共删除逻辑 =====
@@ -1822,6 +1844,14 @@ async function fetchBase64Asset(relativePath) {
 // Local font files usable inside the app. Large CJK files are skipped in
 // standalone export and replaced with system font fallbacks so shared HTML
 // stays openable outside Capacitor.
+// Filled by every standalone export so the UI can tell the user when the
+// document depends on system fonts (Chinese).
+let lastExportFontReport = { embedded: [], needsSystemFonts: [], tooBig: [] };
+
+// maxBytes guards against a broken/oversized file; the CJK TTFs are ~14-16 MB
+// and must pass on the Android WebView too, or Chinese text would print in an
+// unknown font. Exports are only "standalone" (self-contained) when the CJK
+// file is actually embedded — see `needsSystemFonts`.
 const EXPORT_FONT_FILES = {
   'Cardo': [{ path: 'fonts/Cardo-Regular.ttf', weight: '400 700', style: 'normal', maxBytes: 2_000_000 }],
   'Source Serif 4': [
@@ -1834,9 +1864,12 @@ const EXPORT_FONT_FILES = {
   'Merriweather': null,
   'Open Sans': null,
   'Roboto': null,
-  // CJK full fonts are huge; do not embed by default.
-  'Noto Serif HK': null,
-  'Noto Serif SC': null
+  // CJK: embedding is opt-in in the export dialog (base64 adds ~33%).
+  // 'Noto Serif HK' uses the variable Noto Serif HK file.
+  'Noto Serif HK': [{ path: 'fonts/NotoSerifHK-Variable.ttf', weight: '200 900', style: 'normal', maxBytes: 20_000_000 }],
+  // There is no standalone Noto Serif SC file: Source Han Serif SC stands in
+  // for it (subset of Noto Serif CJK SC, same design).
+  'Noto Serif SC': [{ path: 'fonts/SourceHanSerifSC-Regular.ttf', weight: '400', style: 'normal', maxBytes: 20_000_000 }]
 };
 
 const EXPORT_SYSTEM_FONT_FALLBACKS = {
@@ -1850,7 +1883,27 @@ const EXPORT_SYSTEM_FONT_FALLBACKS = {
   'Roboto': ["'Roboto'", 'Arial', 'sans-serif']
 };
 
-async function buildEmbeddedFontCss(project) {
+// Families whose glyphs come from the bundled CJK TTFs / Google CJK CSS.
+function isCjkFamily(name) {
+  return /^(Noto Serif (HK|SC|CJK|TC)|Source Han Serif (HK|SC|TC|CN))$/i.test(String(name || '').trim());
+}
+
+// The CJK families the export would add on top of the project's stack.
+// `embedCjk` may be true / false / an explicit family name.
+function cjkExportFamilies(project, embedCjk) {
+  const stack = getFontSettings(project || {}).stack;
+  const wanted = [];
+  if (typeof embedCjk === 'string') wanted.push(embedCjk);
+  for (const name of ['Noto Serif HK', 'Noto Serif SC']) {
+    const saved = stack.find(f => f === name);
+    if (saved) wanted.push(saved);
+  }
+  // Fall back to the HK face for any other CJK family name in the stack.
+  for (const name of stack) if (isCjkFamily(name)) wanted.push(name);
+  return [...new Set(wanted)];
+}
+
+async function buildEmbeddedFontCss(project, options = {}) {
   const family = getProjectFontFamily(project || {});
   // CDN edition without bundled CJK fonts: let Google Fonts serve everything.
   if (getAssetMode() === 'cdn' && !hasLocalCjkFonts()) {
@@ -1861,19 +1914,34 @@ async function buildEmbeddedFontCss(project) {
   const faces = [];
   const familyNames = [];
   const seen = new Set();
+  // Which CJK families to pull in this time: false = none (default: exports
+  // stay text-only and rely on system fonts), true = the project's CJK fonts,
+  // or an explicit family name from the export dialog.
+  const cjkWanted = options.embedCjk ? cjkExportFamilies(project, options.embedCjk) : [];
+  const tooBig = [];
+  const classicNames = settings.stack.filter(name => !isCjkFamily(name));
 
-  for (const name of [...settings.stack, 'Noto Serif HK', 'Noto Serif SC', 'Cardo']) {
+  for (const name of [...classicNames, 'Noto Serif HK', 'Noto Serif SC', 'Cardo']) {
     if (!name || seen.has(name)) continue;
+    if (isCjkFamily(name) && !cjkWanted.includes(name)) continue;
     seen.add(name);
     familyNames.push(name);
-    const specs = EXPORT_FONT_FILES[name];
+    const specs = Object.prototype.hasOwnProperty.call(EXPORT_FONT_FILES, name)
+      ? EXPORT_FONT_FILES[name]
+      : (isCjkFamily(name) ? EXPORT_FONT_FILES['Noto Serif HK'] : null);
     if (!specs) continue;
     for (const spec of specs) {
       try {
         const response = await fetch(new URL(spec.path, window.location.href));
-        if (!response.ok) continue;
+        if (!response.ok) {
+          if (isCjkFamily(name)) tooBig.push({ family: name, reason: 'missing' });
+          continue;
+        }
         const buffer = await response.arrayBuffer();
-        if (buffer.byteLength > (spec.maxBytes || 2_000_000)) continue;
+        if (buffer.byteLength > (spec.maxBytes || 2_000_000)) {
+          if (isCjkFamily(name)) tooBig.push({ family: name, reason: 'too-big' });
+          continue;
+        }
         const base64 = arrayBufferToBase64(buffer);
         const format = spec.path.endsWith('.woff2') ? 'woff2' : spec.path.endsWith('.woff') ? 'woff' : 'truetype';
         faces.push(`@font-face{font-family:'${String(name).replace(/'/g, '')}';font-style:${spec.style};font-weight:${spec.weight};font-display:swap;src:url(data:font/${format === 'truetype' ? 'ttf' : format};base64,${base64}) format('${format}');}`);
@@ -1883,17 +1951,36 @@ async function buildEmbeddedFontCss(project) {
     }
   }
 
-  // Installed copies of the CJK families win over generic system fallbacks.
+  // Font stack for the exported document: the embedded families first (so the
+  // font that actually ships in the file wins), then system fallbacks for
+  // whatever was not embedded. CJK faces go after the Latin faces: Latin fonts
+  // have no CJK glyphs, so the browser falls through per character.
   const embeddedNames = new Set(faces.map(face => (face.match(/font-family:'([^']+)'/) || [])[1]).filter(Boolean));
-  const stackedFamily = familyNames
-    .flatMap(name => (embeddedNames.has(name) ? [`'${String(name).replace(/'/g, '')}'`] : null)
-      || EXPORT_SYSTEM_FONT_FALLBACKS[name]
-      || [`'${String(name).replace(/'/g, '')}'`])
-    .concat(['serif'])
-    .filter((value, index, arr) => arr.indexOf(value) === index)
-    .join(', ');
+  const quote = name => `'${String(name).replace(/'/g, '')}'`;
+  const latinOrder = [...new Set([...familyNames.filter(n => !isCjkFamily(n)), 'Cardo'])];
+  const cjkOrder = [...new Set([...familyNames.filter(isCjkFamily),
+    ...(options.embedCjk ? ['Noto Serif HK', 'Noto Serif SC'] : [])])];
+  const stackParts = [];
+  const push = value => { if (value && !stackParts.includes(value)) stackParts.push(value); };
+  for (const name of latinOrder) push(embeddedNames.has(name) ? null : (EXPORT_SYSTEM_FONT_FALLBACKS[name] || [])[0] || quote(name));
+  for (const name of latinOrder) if (embeddedNames.has(name)) push(quote(name));
+  for (const name of cjkOrder) push(embeddedNames.has(name) ? quote(name) : null);
+  for (const name of cjkOrder) for (const fallback of EXPORT_SYSTEM_FONT_FALLBACKS[name] || []) push(fallback);
+  push('serif');
+  const stackedFamily = stackParts.join(', ');
 
-  return { css: faces.join('\n'), family: stackedFamily || family, headLinks: [] };
+  // CJK families that the document will need but that are NOT inside it.
+  const cjkRequired = options.embedCjk ? cjkExportFamilies(project, options.embedCjk) : [];
+  const needsSystemFonts = cjkRequired.filter(name => !embeddedNames.has(name));
+
+  return {
+    css: faces.join('\n'),
+    family: stackedFamily || family,
+    headLinks: [],
+    embedded: [...embeddedNames],
+    needsSystemFonts,
+    tooBig
+  };
 }
 
 async function buildInlinedKatexCss() {
@@ -1967,7 +2054,7 @@ function buildExportDom(project, options = {}) {
 async function buildStandaloneExportHtml(project, options = {}) {
   const renderedMode = options.rendered === true;
   const snapshot = buildExportDom(project, { rendered: renderedMode });
-  const fontPack = await buildEmbeddedFontCss(project);
+  const fontPack = await buildEmbeddedFontCss(project, { embedCjk: options.embedCjk });
   const family = fontPack.family || snapshot.family;
   const fontCss = fontPack.css || '';
   const headLinks = [...(fontPack.headLinks || [])];
@@ -1989,6 +2076,11 @@ async function buildStandaloneExportHtml(project, options = {}) {
     if (printButton) printButton.addEventListener('click', function () { window.print(); });
   <\/script>` : '';
   const modeNote = renderedMode ? 'rendered' : 'source';
+  lastExportFontReport = {
+    embedded: fontPack.embedded || [],
+    needsSystemFonts: fontPack.needsSystemFonts || [],
+    tooBig: fontPack.tooBig || []
+  };
 
   return `<!DOCTYPE html>
 <html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
@@ -2085,6 +2177,101 @@ function getProjectFontFamily(project) {
     .join(', ');
 }
 
+// Renders the standalone export page at full size in the app, waits for the
+// fonts to load (Chinese TTFs are big) and then opens Android's print dialog
+// where "Save as PDF" writes the real PDF. Falls back to sharing the HTML.
+function printExportHtmlInApp(html) {
+  return new Promise((resolve, reject) => {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;left:-200vw;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;';
+    let done = false;
+    const fail = (error) => {
+      if (done) return;
+      done = true;
+      frame.remove();
+      reject(error || new Error('print failed'));
+    };
+    frame.onload = () => {
+      const win = frame.contentWindow;
+      const start = () => {
+        if (done) return;
+        done = true;
+        try {
+          win.focus();
+          win.print();
+          resolve(true);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      // Wait for the embedded CJK face, otherwise the first page can print blank.
+      const fonts = win && win.document && win.document.fonts;
+      const waitFonts = fonts && fonts.ready ? fonts.ready.then(() => true) : Promise.resolve(true);
+      waitFonts.then(() => setTimeout(start, 150)).catch(() => setTimeout(start, 400));
+      // Safety net: never hang the UI if the print dialog is blocked.
+      setTimeout(() => { if (!done) fail(new Error('print timeout')); }, 20000);
+    };
+    frame.onerror = () => fail(new Error('print frame failed'));
+    document.body.appendChild(frame);
+    frame.srcdoc = html;
+  });
+}
+
+async function printHtmlAsPdf(html, filename) {
+  try {
+    await printExportHtmlInApp(html);
+    return;
+  } catch (error) {
+    console.error('print to PDF failed, sharing the HTML instead', error);
+    await downloadExport(filename, html, 'text/html;charset=utf-8');
+    showAlert('export-print-fallback');
+  }
+}
+
+const CJK_EMBED_COPY = {
+  zh: {
+    title: '导出 PDF',
+    message: '是否把中文字体一起写进文件？内嵌后任何设备都能正确显示中文，但文件会大约增加 %SIZE%，导出也更慢。',
+    embed: '内嵌中文字体',
+    system: '不内嵌（仅依赖系统字体）',
+    cancel: '取消'
+  },
+  en: {
+    title: 'Export PDF',
+    message: 'Embed the Chinese font into the file? Embedded text renders everywhere, but the file grows by about %SIZE% and export takes longer.',
+    embed: 'Embed Chinese font',
+    system: 'Do not embed (system fonts only)',
+    cancel: 'Cancel'
+  }
+};
+
+// Resolves true (embed), false (system fonts) or null (user cancelled).
+async function chooseCjkEmbedding(project) {
+  if (isCjkEmbeddingForced()) return isCjkEmbeddingForced() === 'embed';
+  const stack = getFontSettings(project || {}).stack;
+  const usesCjk = stack.some(isCjkFamily);
+  const canEmbed = getAssetMode() === 'local' || hasLocalCjkFonts();
+  if (!usesCjk || !canEmbed) return false; // nothing to embed / no file to embed
+  if (!document.getElementById('confirmModal')) return true; // headless: be safe
+
+  const copy = CJK_EMBED_COPY[currentLang === 'zh' ? 'zh' : 'en'];
+  const sizeHint = getAssetMode() === 'local' ? '15–20 MB' : '20–27 MB';
+  return new Promise(resolve => {
+    showConfirm(
+      copy.message.replace('%SIZE%', sizeHint),
+      () => resolve(true),
+      { title: copy.title, confirmText: copy.embed, cancelText: copy.system, onDismiss: () => resolve(null) }
+    );
+  });
+}
+
+// Test/support hook: window.DRAFT_CJK_EMBED = 'embed' | 'system' skips the prompt.
+function isCjkEmbeddingForced() {
+  const forced = String(window.DRAFT_CJK_EMBED || '').toLowerCase();
+  return forced === 'embed' || forced === 'system' ? forced : '';
+}
+
 async function exportPdf(project, options = {}) {
   if (!project) {
     showAlert('alert-select-project');
@@ -2099,9 +2286,13 @@ async function exportPdf(project, options = {}) {
   // rendered:true  => Render Preview export (markdown + math)
   // rendered:false => direct export (editor source, no markdown/math pass)
   const renderedMode = options.rendered === true;
+  // Chinese needs the ~15 MB TTF inside the document or the print engine
+  // (Android WebView) draws blanks/boxes. Ask once per export.
+  const embedCjk = await chooseCjkEmbedding(project);
   const html = await buildStandaloneExportHtml(project, {
     rendered: renderedMode,
-    printable: !isNativeApp()
+    printable: !isNativeApp(),
+    embedCjk
   });
 
   if (isNativeApp()) {
@@ -2110,11 +2301,11 @@ async function exportPdf(project, options = {}) {
       renderDraftPreview(project);
       renderPreviewWindow.classList.add('show');
     }
-    // Distinguish filenames so rendered vs source exports can coexist.
-    const filename = renderedMode
-      ? getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html')
-      : getExportFilename(project.title, 'html').replace(/\.html$/i, '.source.html');
-    await downloadExport(filename, html, 'text/html;charset=utf-8');
+    if ((lastExportFontReport.needsSystemFonts || []).length) {
+      showAlert('export-needs-system-fonts');
+    }
+    const filename = getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html');
+    await printHtmlAsPdf(html, filename);
     return;
   }
 

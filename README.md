@@ -209,8 +209,27 @@ Deploy Pages from `dist/web` (or `~/draft` after sync).
 
 - Hardware back closes overlays first, then edit → view → home, then minimizes the app.
 - Export on device uses the system share sheet (Save to Files / Drive / etc.).
-- **Direct export** (drawer / settings): source content — no markdown/math pass (`.txt` / `.md` / `.rtf` / `.source.html`).
-- **Render Preview export**: rendered snapshot (markdown + math) as self-contained `.rendered.html` with inlined fonts/KaTeX.
+- **Direct export** (drawer / settings): source content — no markdown/math pass (`.txt` / `.md` / `.rtf`), and `PDF` = the editor text through the print dialog.
+- **Render Preview export**: rendered snapshot (markdown + math) with inlined KaTeX.
+
+### PDF export and Chinese text
+
+PDF is produced by the Android print dialog (**Save as PDF**), not a JS PDF
+writer. The Android WebView can only draw glyphs of fonts that are (a) in the
+document or (b) installed on the device — so an export without an embedded
+Chinese font prints Chinese as blanks on most phones.
+
+- When a PDF export is started for a project whose font stack uses a Chinese
+  family, the app asks: **内嵌中文字体** / 不内嵌. Embedding puts the ~14–16 MB
+  TTF into the page as `data:` (file ≈ 20 MB, slower export); not embedding is
+  fast but only correct on devices that have a Chinese serif installed.
+- The Chinese file embedded is `fonts/NotoSerifHK-Variable.ttf` (Noto Serif HK)
+  or `fonts/SourceHanSerifSC-Regular.ttf` (stands in for Noto Serif SC).
+- Set `window.DRAFT_CJK_EMBED = 'embed' | 'system'` to skip the prompt (tests).
+- Browser export keeps using the print toolbar; the mobile path renders the
+  same page in a hidden iframe, waits for `document.fonts.ready`, then calls
+  `window.print()`. If the print dialog cannot open, the HTML is shared instead
+  (open it in a browser → Print → Save as PDF).
 
 ## Offline assets
 
