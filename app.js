@@ -81,7 +81,9 @@ function blobToBase64(blob) {
   });
 }
 
-async function shareNativeFile(filename, data, encoding) {
+// `data` must be base64 (Capacitor serialises plugin calls to JSON). `mimeType`
+// only matters on Android, where the share sheet uses it to pick apps.
+async function shareNativeFile(filename, data, encoding, mimeType) {
   const native = getDraftNative();
   if (!native) throw new Error('native bridge missing');
   const path = `exports/${filename}`;
@@ -100,11 +102,18 @@ async function shareNativeFile(filename, data, encoding) {
     });
     uri = result.uri;
   }
-  await native.Share.share({
-    title: filename,
-    url: uri,
-    dialogTitle: filename
-  });
+  try {
+    await native.Share.share({
+      title: filename,
+      url: uri,
+      dialogTitle: filename,
+      ...(mimeType ? { files: [uri], mimeType } : {})
+    });
+  } catch (error) {
+    // User closing the share sheet is not an error worth shouting about.
+    if (/cancel/i.test(String(error && error.message))) return;
+    throw error;
+  }
 }
 
 
@@ -148,6 +157,7 @@ function showAlert(messageKey) {
   const okBtn = document.getElementById('alertOk');
 
   const t = translations[currentLang] || translations['zh'];
+  // Reset any detail line left by showExportError().
   text.textContent = t[messageKey] || messageKey;
 
   modal.classList.add('show');
@@ -1617,11 +1627,11 @@ async function downloadExport(filename, content, type) {
   if (isNativeApp()) {
     try {
       const base64 = await blobToBase64(blob);
-      await shareNativeFile(filename, base64);
+      await shareNativeFile(filename, base64, undefined, type || blob.type || '');
       return;
     } catch (error) {
       console.error('native export failed', error);
-      showAlert('export-failed');
+      showExportError(error);
       return;
     }
   }
@@ -2177,56 +2187,127 @@ function getProjectFontFamily(project) {
     .join(', ');
 }
 
-// Renders the standalone export page at full size in the app, waits for the
-// fonts to load (Chinese TTFs are big) and then opens Android's print dialog
-// where "Save as PDF" writes the real PDF. Falls back to sharing the HTML.
-function printExportHtmlInApp(html) {
-  return new Promise((resolve, reject) => {
-    const frame = document.createElement('iframe');
-    frame.setAttribute('aria-hidden', 'true');
-    frame.style.cssText = 'position:fixed;left:-200vw;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;';
-    let done = false;
-    const fail = (error) => {
-      if (done) return;
-      done = true;
-      frame.remove();
-      reject(error || new Error('print failed'));
-    };
-    frame.onload = () => {
-      const win = frame.contentWindow;
-      const start = () => {
-        if (done) return;
-        done = true;
-        try {
-          win.focus();
-          win.print();
-          resolve(true);
-        } catch (error) {
-          reject(error);
-        }
-      };
-      // Wait for the embedded CJK face, otherwise the first page can print blank.
-      const fonts = win && win.document && win.document.fonts;
-      const waitFonts = fonts && fonts.ready ? fonts.ready.then(() => true) : Promise.resolve(true);
-      waitFonts.then(() => setTimeout(start, 150)).catch(() => setTimeout(start, 400));
-      // Safety net: never hang the UI if the print dialog is blocked.
-      setTimeout(() => { if (!done) fail(new Error('print timeout')); }, 20000);
-    };
-    frame.onerror = () => fail(new Error('print frame failed'));
-    document.body.appendChild(frame);
-    frame.srcdoc = html;
-  });
+// ---------------------------------------------------------------------------
+// PDF export on device
+// 1. Preferred: the native PrintBridge (offline edition) hands the exact HTML
+//    to Android's print framework, which renders with the bundled CJK font and
+//    offers "Save as PDF". No iframe, no WebView print() quirks.
+// 2. Otherwise: share the standalone HTML file (works everywhere).
+// Every failure path must tell the user — silent no-ops are the bug we are
+// fixing.
+// ---------------------------------------------------------------------------
+
+function getPrintBridge() {
+  const native = getDraftNative();
+  const bridge = native && native.Print;
+  return bridge && typeof bridge.printHtml === 'function' ? bridge : null;
+}
+
+// The native side keeps a hidden WebView alive while the system print dialog is
+// open; give the user time to choose, then let it go.
+function releasePrintBridge(bridge) {
+  if (!bridge || typeof bridge.cleanup !== 'function') return;
+  setTimeout(() => {
+    bridge.cleanup().catch(error => console.warn('print cleanup failed', error));
+  }, 120000);
+}
+
+// Visible progress while the (possibly 20 MB) export is built in memory.
+let exportBusyCount = 0;
+function setExportBusy(busy) {
+  exportBusyCount = Math.max(0, exportBusyCount + (busy ? 1 : -1));
+  const el = document.querySelector('.loading');
+  if (!el) return;
+  el.classList.toggle('show', exportBusyCount > 0);
+}
+
+// Always visible feedback on failure; the reason stays in the console.
+function showExportError(error) {
+  const message = String((error && (error.message || error)) || '').slice(0, 300);
+  console.error('export error:', error);
+  if (message) {
+    const text = document.getElementById('alertText');
+    if (text) {
+      const t = translations[currentLang] || translations['zh'];
+      const reason = document.createElement('span');
+      reason.textContent = message;
+      reason.style.display = 'block';
+      reason.style.marginTop = '6px';
+      reason.style.fontSize = '0.85em';
+      reason.style.opacity = '0.75';
+      reason.style.wordBreak = 'break-word';
+      text.textContent = t['export-failed-detail'] || '导出失败';
+      text.appendChild(reason);
+      const modal = document.getElementById('alertModal');
+      const okBtn = document.getElementById('alertOk');
+      if (modal && okBtn) {
+        modal.classList.add('show');
+        okBtn.onclick = () => modal.classList.remove('show');
+        return;
+      }
+    }
+  }
+  showAlert('export-failed-detail');
+}
+
+// Filesystem.writeFile only accepts a plain base64 string. Passing raw HTML
+// makes Capacitor fail JSON.stringify on the plugin call → bare "Data cannot be
+// converted to a JSON value" and no share sheet. Always hand it base64.
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(String(text));
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Keep a copy of the last export so a failure can be retried after the big
+// embedded HTML has been dropped from memory.
+let lastExportPayload = null;
+
+async function shareExportHtml(html, filename) {
+  if (!getDraftNative()) throw new Error('native bridge missing');
+  await shareNativeFile(filename, utf8ToBase64(html), undefined, 'text/html');
 }
 
 async function printHtmlAsPdf(html, filename) {
-  try {
-    await printExportHtmlInApp(html);
-    return;
-  } catch (error) {
-    console.error('print to PDF failed, sharing the HTML instead', error);
-    await downloadExport(filename, html, 'text/html;charset=utf-8');
-    showAlert('export-print-fallback');
+  lastExportPayload = { html, filename };
+  const bridge = getPrintBridge();
+  if (bridge) {
+    try {
+      await bridge.printHtml({ fileName: filename, content: html });
+      releasePrintBridge(bridge);
+      return;
+    } catch (error) {
+      console.error('native print failed, falling back to sharing the HTML', error);
+      if (await shareExportHtml(html, filename).then(() => true, (e) => {
+        console.error('share fallback failed', e);
+        return false;
+      })) {
+        showAlert('export-print-fallback');
+        return;
+      }
+      showAlert('export-failed-detail');
+      return;
+    }
   }
+
+  try {
+    await shareExportHtml(html, filename);
+    showAlert('export-shared-html');
+  } catch (error) {
+    console.error('share export failed', error);
+    showAlert('export-failed-detail');
+  }
+}
+
+// Retry entry point used by the failure alert.
+async function retryLastExport() {
+  const payload = lastExportPayload;
+  if (!payload) return;
+  await printHtmlAsPdf(payload.html, payload.filename);
 }
 
 const CJK_EMBED_COPY = {
@@ -2246,23 +2327,67 @@ const CJK_EMBED_COPY = {
   }
 };
 
-// Resolves true (embed), false (system fonts) or null (user cancelled).
+// Asks the user once, before anything is built, whether the Chinese font should
+// travel inside the file. Resolves true (embed), false (system fonts) or null
+// (cancelled — the caller must then do nothing at all).
 async function chooseCjkEmbedding(project) {
-  if (isCjkEmbeddingForced()) return isCjkEmbeddingForced() === 'embed';
+  const forced = isCjkEmbeddingForced();
+  if (forced) return forced === 'embed';
   const stack = getFontSettings(project || {}).stack;
   const usesCjk = stack.some(isCjkFamily);
   const canEmbed = getAssetMode() === 'local' || hasLocalCjkFonts();
   if (!usesCjk || !canEmbed) return false; // nothing to embed / no file to embed
-  if (!document.getElementById('confirmModal')) return true; // headless: be safe
+  if (!document.getElementById('exportChoiceModal')) return true; // headless: be safe
 
   const copy = CJK_EMBED_COPY[currentLang === 'zh' ? 'zh' : 'en'];
   const sizeHint = getAssetMode() === 'local' ? '15–20 MB' : '20–27 MB';
   return new Promise(resolve => {
-    showConfirm(
-      copy.message.replace('%SIZE%', sizeHint),
-      () => resolve(true),
-      { title: copy.title, confirmText: copy.embed, cancelText: copy.system, onDismiss: () => resolve(null) }
-    );
+    openExportChoice({
+      title: copy.title,
+      message: copy.message.replace('%SIZE%', sizeHint),
+      actions: [
+        { label: copy.embed, value: true, variant: 'primary' },
+        { label: copy.system, value: false },
+        { label: copy.cancel, value: null, variant: 'ghost' }
+      ]
+    }).then(resolve);
+  });
+}
+
+// Generic in-app decision sheet (works without prompt()/confirm(), which are
+// unreliable in the Android WebView). Resolves the chosen value, or null when a
+// 'ghost'/dismiss action is used. Content and buttons are plain DOM nodes, so no
+// i18n keys are required for one-off messages.
+function openExportChoice({ title, message, actions }) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('exportChoiceModal');
+    const titleEl = document.getElementById('exportChoiceTitle');
+    const textEl = document.getElementById('exportChoiceText');
+    const buttonsEl = document.getElementById('exportChoiceButtons');
+    if (!modal || !titleEl || !textEl || !buttonsEl) {
+      resolve(true);
+      return;
+    }
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      modal.classList.remove('show');
+      buttonsEl.innerHTML = '';
+      resolve(value);
+    };
+    titleEl.textContent = title || '';
+    textEl.textContent = message || '';
+    buttonsEl.innerHTML = '';
+    for (const action of actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `export-choice-btn${action.variant ? ' ' + action.variant : ''}`;
+      button.textContent = action.label;
+      button.addEventListener('click', () => finish(action.value));
+      buttonsEl.appendChild(button);
+    }
+    modal.classList.add('show');
   });
 }
 
@@ -2286,14 +2411,29 @@ async function exportPdf(project, options = {}) {
   // rendered:true  => Render Preview export (markdown + math)
   // rendered:false => direct export (editor source, no markdown/math pass)
   const renderedMode = options.rendered === true;
-  // Chinese needs the ~15 MB TTF inside the document or the print engine
-  // (Android WebView) draws blanks/boxes. Ask once per export.
-  const embedCjk = await chooseCjkEmbedding(project);
-  const html = await buildStandaloneExportHtml(project, {
-    rendered: renderedMode,
-    printable: !isNativeApp(),
-    embedCjk
-  });
+
+  // Ask BEFORE building: a 20 MB embed (or a cancelled export) must not sit
+  // behind a long silent build or leave the UI half-open.
+  setExportBusy(true);
+  let embedCjk = false;
+  let html = '';
+  try {
+    embedCjk = await chooseCjkEmbedding(project);
+    if (embedCjk === null) return; // user cancelled — nothing happens
+    html = await buildStandaloneExportHtml(project, {
+      rendered: renderedMode,
+      printable: !isNativeApp(),
+      embedCjk
+    });
+    // Remember the choice so the next export is one tap.
+    Draft.cjkEmbedPref = embedCjk;
+  } catch (error) {
+    console.error('export build failed', error);
+    showAlert('export-failed');
+    return;
+  } finally {
+    setExportBusy(false);
+  }
 
   if (isNativeApp()) {
     // Only jump to the in-app preview when exporting the rendered version.
@@ -2301,11 +2441,12 @@ async function exportPdf(project, options = {}) {
       renderDraftPreview(project);
       renderPreviewWindow.classList.add('show');
     }
+    const filename = getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html');
+    // Offline PrintBridge writes a real PDF; browsers keep print + share the HTML.
+    await printHtmlAsPdf(html, filename);
     if ((lastExportFontReport.needsSystemFonts || []).length) {
       showAlert('export-needs-system-fonts');
     }
-    const filename = getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html');
-    await printHtmlAsPdf(html, filename);
     return;
   }
 

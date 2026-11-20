@@ -1792,3 +1792,52 @@ body.edit-page .tool-float-button:active {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- Export choice sheet (embed Chinese font / system fonts) ---------- */
+.export-choice-modal .export-choice-box {
+  width: min(92vw, 420px);
+  padding: 20px 18px 16px;
+  text-align: left;
+}
+
+.export-choice-title {
+  margin: 0 0 8px;
+  font-size: 1.05em;
+  font-weight: 700;
+}
+
+.export-choice-text {
+  margin: 0 0 16px;
+  font-size: 0.92em;
+  line-height: 1.55;
+  color: var(--color-text-secondary, #555);
+}
+
+.export-choice-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.export-choice-btn {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--color-border, #d7dee8);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.95em;
+  cursor: pointer;
+}
+
+.export-choice-btn.primary {
+  border-color: #1F7FFF;
+  background: #1F7FFF;
+  color: #fff;
+}
+
+.export-choice-btn.ghost {
+  border-color: transparent;
+  color: var(--color-text-secondary, #777);
+}

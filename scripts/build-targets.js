@@ -283,6 +283,23 @@ function buildOne(name) {
   console.log(`  ok ${name} (mode=${target.assetMode}, v=${ASSET_VERSION})`);
 }
 
+// The Capacitor Android project is generated (not committed), so the custom
+// native plugins are copied in after `npx cap add android` has run. Controlled by
+// DRAFT_ANDROID_DIR (set in CI); silently skipped when the project is absent.
+function installNativePlugins(names) {
+  const androidDir = process.env.DRAFT_ANDROID_DIR;
+  if (!androidDir || !fs.existsSync(androidDir)) return;
+  const appId = process.env.DRAFT_APP_ID || 'com.kwiwi.draft';
+  // The Print plugin is only referenced by the offline (fully local) edition.
+  if (!names.includes('local') && !names.includes('offline')) return;
+  const src = path.join(ROOT, 'android-plugin/PrintPlugin.kt');
+  const dest = path.join(androidDir, 'app/src/main/java', ...appId.split('.'));
+  if (!fs.existsSync(src)) return;
+  mkdirp(dest);
+  fs.copyFileSync(src, path.join(dest, 'PrintPlugin.kt'));
+  console.log(`  native plugin: PrintPlugin.kt → ${path.relative(ROOT, dest)}`);
+}
+
 function main() {
   if (!fs.existsSync(TEMPLATE)) {
     console.error('Missing index.template.html');
@@ -300,6 +317,8 @@ function main() {
 
   const needNative = names.some((n) => TARGETS[n].copyNative);
   if (needNative) buildNativeBridge();
+
+  installNativePlugins(names);
 
   // Refuse to ship a build that promises local fonts it cannot find.
   const needsLatin = names.some((n) => TARGETS[n].forceLatinFonts);

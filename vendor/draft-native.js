@@ -1245,13 +1245,15 @@
   });
 
   // scripts/native-entry.js
+  var Print = registerPlugin("Print");
   window.DraftNative = {
     Capacitor,
     App,
     Filesystem,
     Directory,
     Encoding,
-    Share
+    Share,
+    Print
   };
 })();
 /*! Bundled license information:

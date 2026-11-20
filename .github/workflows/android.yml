@@ -108,6 +108,23 @@ jobs:
           npx cap config --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("edition:",process.env.DRAFT_EDITION,"| id:",j.app.appId,"| webDir:",j.app.webDir)})'
           npx cap add android
 
+      # Custom native plugins (PrintPlugin for PDF export) live outside the
+      # generated android/ project; install them once it exists.
+      - name: Install native plugins
+        if: steps.want.outputs.run == 'true'
+        env:
+          DRAFT_ANDROID_DIR: android
+          DRAFT_APP_ID: ${{ matrix.slug }}
+        run: |
+          if [ "${{ matrix.edition }}" = "offline" ]; then
+            DEST="android/app/src/main/java/$(echo "${{ matrix.slug }}" | tr . /)"
+            mkdir -p "$DEST"
+            cp android-plugin/PrintPlugin.kt "$DEST/"
+            ls -l "$DEST"
+          else
+            echo "No native plugins for the ${{ matrix.edition }} edition."
+          fi
+
       - name: Sync web assets into Android project
         if: steps.want.outputs.run == 'true'
         run: npx cap sync android
