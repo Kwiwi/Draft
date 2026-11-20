@@ -4,7 +4,10 @@ name: Android APKs
 # own rolling release:
 #   Draft              (com.kwiwi.draft)            offline build, all fonts local
 #   Draft CDN          (com.kwiwi.draft.cdn)        light build, fonts via CDN
-#   Draft CDN Local    (com.kwiwi.draft.cdnlocal)   light build, CJK fonts local
+#   Draft CDN Local    (com.kwiwi.draft.cdnlocal)   light build, Latin fonts local
+#
+# The Capacitor edition comes from DRAFT_EDITION (see capacitor.config.js):
+# no --config flag exists in Cap 7, it only reads the root config.
 #
 # Note: only the `offline` variant keeps the historic apk filename/artifact
 # (Draft-debug-rN-sha / draft-debug-apk-rN) so existing download links keep working.
@@ -25,27 +28,27 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # capacitor.config.js picks this edition's JSON (Cap 7 has no --config).
+      DRAFT_EDITION: ${{ matrix.edition }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - edition: offline
             build: build:local
-            config: capacitor.config.json
             apk_prefix: Draft
             release_tag: debug-latest
             release_title: Draft debug (latest)
             slug: com.kwiwi.draft
           - edition: cdn
             build: build:cdn
-            config: capacitor.config.cdn.json
             apk_prefix: Draft-CDN
             release_tag: cdn-debug-latest
             release_title: Draft CDN debug (latest)
             slug: com.kwiwi.draft.cdn
           - edition: cdn-local
             build: build:cdn-local
-            config: capacitor.config.cdn-local.json
             apk_prefix: Draft-CDN-Local
             release_tag: cdn-local-debug-latest
             release_title: Draft CDN Local debug (latest)
@@ -97,13 +100,17 @@ jobs:
         if: steps.want.outputs.run == 'true'
         run: npm run ${{ matrix.build }}
 
+      # The Capacitor CLI (7.x) has no --config flag; capacitor.config.js picks
+      # the edition's JSON from DRAFT_EDITION (job env above).
       - name: Add Capacitor Android platform
         if: steps.want.outputs.run == 'true'
-        run: npx cap add android --config "${{ matrix.config }}"
+        run: |
+          npx cap config --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("edition:",process.env.DRAFT_EDITION,"| id:",j.app.appId,"| webDir:",j.app.webDir)})'
+          npx cap add android
 
       - name: Sync web assets into Android project
         if: steps.want.outputs.run == 'true'
-        run: npx cap sync android --config "${{ matrix.config }}"
+        run: npx cap sync android
 
       - name: Generate launcher icons
         if: steps.want.outputs.run == 'true'

@@ -11,6 +11,8 @@ A note-taking web app packaged as a hybrid Android app with Capacitor.
 - `capacitor.config.json` — main offline app (`com.kwiwi.draft`)
 - `capacitor.config.cdn.json` — CDN app id/name (`com.kwiwi.draft.cdn`)
 - `capacitor.config.cdn-local.json` — CDN + local Latin fonts (`com.kwiwi.draft.cdnlocal`)
+- `capacitor.config.js` — picks one of the three JSONs from `DRAFT_EDITION`
+  (Capacitor 7 has **no** `--config` flag; it only reads the root config file)
 
 Do **not** hand-edit `~/draft` or `~/draft_app_n` for features; refresh them from here.
 
@@ -106,15 +108,21 @@ npx cap sync android
 cd android && ./gradlew assembleDebug
 ```
 
-CDN APKs (separate app ids), from this same tree:
+CDN APKs (separate app ids), from this same tree. Capacitor picks the edition
+via `DRAFT_EDITION` (it has no `--config` flag):
 
 ```bash
 npm run build:cdn
-npx cap sync android --config capacitor.config.cdn.json          # ~/draft_app_n after npm run sync:cdn
+DRAFT_EDITION=cdn npx cap add android        # first time only
+DRAFT_EDITION=cdn npx cap sync android
 
 npm run build:cdn-local
-npx cap sync android --config capacitor.config.cdn-local.json    # ~/draft_app_n_local after npm run sync:cdn-local
+DRAFT_EDITION=cdn-local npx cap add android  # first time only
+DRAFT_EDITION=cdn-local npx cap sync android
 ```
+
+`npx cap config --json` prints the effective `appId` / `webDir` if you want to
+check which edition you are about to build. `DRAFT_EDITION` unset = offline.
 
 Or push to `main`; the **Android APKs** workflow publishes one APK per edition
 (`Draft-debug-rN-<sha>.apk`, `Draft-CDN-debug-rN-<sha>.apk`,
