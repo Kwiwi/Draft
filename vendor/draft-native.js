@@ -1248,6 +1248,7 @@
   var Print = registerPlugin("Print");
   window.DraftNative = {
     Capacitor,
+    CapacitorHttp,
     App,
     Filesystem,
     Directory,

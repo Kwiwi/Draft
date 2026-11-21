@@ -83,6 +83,8 @@ function blobToBase64(blob) {
 
 // `data` must be base64 (Capacitor serialises plugin calls to JSON). `mimeType`
 // only matters on Android, where the share sheet uses it to pick apps.
+// Text exports go through Filesystem's `encoding` path, which writes the bytes
+// as-is instead of running a Base64.decode() over them.
 async function shareNativeFile(filename, data, encoding, mimeType) {
   const native = getDraftNative();
   if (!native) throw new Error('native bridge missing');
@@ -102,6 +104,12 @@ async function shareNativeFile(filename, data, encoding, mimeType) {
     });
     uri = result.uri;
   }
+  await shareNativeUri(native, filename, uri, mimeType);
+}
+
+// Share an already-written cache file. Never rejects on a user-cancelled sheet:
+// throwing there used to surface "export failed" after a perfectly good export.
+async function shareNativeUri(native, filename, uri, mimeType) {
   try {
     await native.Share.share({
       title: filename,
@@ -110,7 +118,6 @@ async function shareNativeFile(filename, data, encoding, mimeType) {
       ...(mimeType ? { files: [uri], mimeType } : {})
     });
   } catch (error) {
-    // User closing the share sheet is not an error worth shouting about.
     if (/cancel/i.test(String(error && error.message))) return;
     throw error;
   }
@@ -157,8 +164,10 @@ function showAlert(messageKey) {
   const okBtn = document.getElementById('alertOk');
 
   const t = translations[currentLang] || translations['zh'];
-  // Reset any detail line left by showExportError().
+  // Reset any detail line / button label left by showExportError() or the
+  // retry alert.
   text.textContent = t[messageKey] || messageKey;
+  okBtn.textContent = t['btn-ok'] || 'OK';
 
   modal.classList.add('show');
 
@@ -1851,6 +1860,59 @@ async function fetchBase64Asset(relativePath) {
   return arrayBufferToBase64(await response.arrayBuffer());
 }
 
+// Assets are fetched for their bytes, so they are read through CapacitorHttp's
+// arraybuffer response. A plain fetch() is NOT safe here: in the Android WebView
+// the local server (WebViewLocalServer) hands everything through
+// HttpRequestHandler.readStreamAsString(), i.e. a Reader that mangles the binary
+// (any invalid UTF-8 byte decodes to U+FFFD, which then encodes to 3 bytes), and
+// that corruption silently produced *blank* PDFs once the CJK base64 was inlined
+// the old way. The arraybuffer path returns the stream base64-encoded untouched.
+const assetBase64Cache = new Map();
+
+async function fetchAssetBase64(relativePath) {
+  const url = new URL(relativePath, window.location.href).href;
+  if (assetBase64Cache.has(url)) return assetBase64Cache.get(url);
+  const native = getDraftNative();
+  let base64 = '';
+  if (native && native.CapacitorHttp && isNativeApp()) {
+    const response = await native.CapacitorHttp.get({
+      url,
+      responseType: 'arraybuffer',
+      connectTimeout: 15000,
+      readTimeout: 60000
+    });
+    if (!response || response.status !== 200 || !response.data) {
+      throw new Error(`Failed to fetch ${relativePath} (HTTP ${response && response.status})`);
+    }
+    base64 = String(response.data);
+  } else {
+    base64 = await fetchBase64Asset(relativePath);
+  }
+  assertBinaryAsset(relativePath, base64);
+  assetBase64Cache.set(url, base64);
+  return base64;
+}
+
+// A corrupted or empty font would be embedded as a broken @font-face and the
+// exported page could print with no text at all. Fail loudly instead.
+function base64ByteLength(base64) {
+  const clean = String(base64).replace(/[^A-Za-z0-9+/=]/g, '');
+  if (!clean) return 0;
+  const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+  return Math.floor((clean.length * 3) / 4) - padding;
+}
+
+function assertBinaryAsset(relativePath, base64) {
+  const decodedLength = base64ByteLength(base64);
+  if (!decodedLength) throw new Error(`${relativePath} is empty`);
+  const clean = String(base64).replace(/[^A-Za-z0-9+/=]/g, '');
+  const head = atob(clean.slice(0, 8));
+  const signature = [0, 1, 2, 3].map(i => head.charCodeAt(i)).join(',');
+  // TrueType "true" / OpenType 1.0, OpenType "OTTO", TrueType 1.0
+  const ok = signature === '0,1,0,0' || signature === '79,84,84,79' || signature === '0,0,1,0';
+  if (!ok) throw new Error(`${relativePath} is not a TTF/OTF font (corrupted download)`);
+}
+
 // Local font files usable inside the app. Large CJK files are skipped in
 // standalone export and replaced with system font fallbacks so shared HTML
 // stays openable outside Capacitor.
@@ -1913,14 +1975,20 @@ function cjkExportFamilies(project, embedCjk) {
   return [...new Set(wanted)];
 }
 
+// Collects the exact bytes of every @font-face the export will contain. The
+// `css` string is only produced by `serializeFontPack`, i.e. once, right before
+// the document is handed to the platform — the CJK face alone is ~22 MB of
+// base64, and every extra copy of it (chunks joined twice, TemplateStrings, the
+// plugin-call JSON string) is another ~22–66 MB on a phone.
 async function buildEmbeddedFontCss(project, options = {}) {
   const family = getProjectFontFamily(project || {});
   // CDN edition without bundled CJK fonts: let Google Fonts serve everything.
   if (getAssetMode() === 'cdn' && !hasLocalCjkFonts()) {
-    return { css: '', family, headLinks: [`<link rel="stylesheet" href="${GOOGLE_FONTS_CSS}">`] };
+    return { css: '', faces: [], family, headLinks: [`<link rel="stylesheet" href="${GOOGLE_FONTS_CSS}">`], embedded: [], needsSystemFonts: [], tooBig: [] };
   }
 
   const settings = getFontSettings(project || {});
+  // Each entry: { name, head, base64, tail } — one @font-face per entry.
   const faces = [];
   const familyNames = [];
   const seen = new Set();
@@ -1930,6 +1998,7 @@ async function buildEmbeddedFontCss(project, options = {}) {
   const cjkWanted = options.embedCjk ? cjkExportFamilies(project, options.embedCjk) : [];
   const tooBig = [];
   const classicNames = settings.stack.filter(name => !isCjkFamily(name));
+  const quote = name => `'${String(name).replace(/'/g, '')}'`;
 
   for (const name of [...classicNames, 'Noto Serif HK', 'Noto Serif SC', 'Cardo']) {
     if (!name || seen.has(name)) continue;
@@ -1942,21 +2011,21 @@ async function buildEmbeddedFontCss(project, options = {}) {
     if (!specs) continue;
     for (const spec of specs) {
       try {
-        const response = await fetch(new URL(spec.path, window.location.href));
-        if (!response.ok) {
-          if (isCjkFamily(name)) tooBig.push({ family: name, reason: 'missing' });
-          continue;
-        }
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength > (spec.maxBytes || 2_000_000)) {
+        const base64 = await fetchAssetBase64(spec.path);
+        const bytes = base64ByteLength(base64);
+        if (bytes > (spec.maxBytes || 2_000_000)) {
           if (isCjkFamily(name)) tooBig.push({ family: name, reason: 'too-big' });
           continue;
         }
-        const base64 = arrayBufferToBase64(buffer);
         const format = spec.path.endsWith('.woff2') ? 'woff2' : spec.path.endsWith('.woff') ? 'woff' : 'truetype';
-        faces.push(`@font-face{font-family:'${String(name).replace(/'/g, '')}';font-style:${spec.style};font-weight:${spec.weight};font-display:swap;src:url(data:font/${format === 'truetype' ? 'ttf' : format};base64,${base64}) format('${format}');}`);
+        // font-display:block — a `swap` face paints nothing until it loads, and
+        // the PDF snapshot may be taken before that.
+        const head = `@font-face{font-family:'${String(name).replace(/'/g, '')}';font-style:${spec.style};font-weight:${spec.weight};font-display:block;src:url(data:font/${format === 'truetype' ? 'ttf' : format};base64,`;
+        const tail = `) format('${format}');}`;
+        faces.push({ name, head, base64, tail });
       } catch (error) {
         console.warn('embed font failed', name, error);
+        if (isCjkFamily(name)) tooBig.push({ family: name, reason: 'unreadable', detail: String((error && error.message) || error) });
       }
     }
   }
@@ -1965,8 +2034,7 @@ async function buildEmbeddedFontCss(project, options = {}) {
   // font that actually ships in the file wins), then system fallbacks for
   // whatever was not embedded. CJK faces go after the Latin faces: Latin fonts
   // have no CJK glyphs, so the browser falls through per character.
-  const embeddedNames = new Set(faces.map(face => (face.match(/font-family:'([^']+)'/) || [])[1]).filter(Boolean));
-  const quote = name => `'${String(name).replace(/'/g, '')}'`;
+  const embeddedNames = new Set(faces.map(face => face.name));
   const latinOrder = [...new Set([...familyNames.filter(n => !isCjkFamily(n)), 'Cardo'])];
   const cjkOrder = [...new Set([...familyNames.filter(isCjkFamily),
     ...(options.embedCjk ? ['Noto Serif HK', 'Noto Serif SC'] : [])])];
@@ -1984,13 +2052,50 @@ async function buildEmbeddedFontCss(project, options = {}) {
   const needsSystemFonts = cjkRequired.filter(name => !embeddedNames.has(name));
 
   return {
-    css: faces.join('\n'),
+    css: '',
+    faces,
     family: stackedFamily || family,
     headLinks: [],
     embedded: [...embeddedNames],
     needsSystemFonts,
     tooBig
   };
+}
+
+// The @font-face rules as text. Only call this once per export, as late as
+// possible: it materialises the full base64 of every embedded font.
+function serializeFontCss(fontPack) {
+  const faces = (fontPack && fontPack.faces) || [];
+  if (!faces.length) return (fontPack && fontPack.css) || '';
+  // Sequential concatenation: V8 flattens cons strings on the first index
+  // access / parse of the result, so one pass is enough.
+  let css = '';
+  for (let i = 0; i < faces.length; i += 1) {
+    const face = faces[i];
+    css += face.head + face.base64 + face.tail;
+    if (i < faces.length - 1) css += '\n';
+  }
+  return css;
+}
+
+// Turn the export into HTML pieces: template chunks separated by the base64 of
+// each embedded font. Used by the native print path, which writes the export to
+// a file through the Filesystem plugin instead of passing a ~22 MB string
+// through one Capacitor plugin call (Jenkins hash + JSON string + JSON parse on
+// the native side, all doubling the memory).
+function splitExportHtmlForChunks(html, fontPack) {
+  const faces = (fontPack && fontPack.faces) || [];
+  if (!faces.length) return [html];
+  const pieces = [];
+  let cursor = 0;
+  for (const face of faces) {
+    const at = html.indexOf(face.base64, cursor);
+    if (at < 0) return [html]; // unexpected: fall back to the plain document
+    pieces.push(html.slice(cursor, at), face.base64);
+    cursor = at + face.base64.length;
+  }
+  pieces.push(html.slice(cursor));
+  return pieces;
 }
 
 async function buildInlinedKatexCss() {
@@ -2068,6 +2173,9 @@ async function buildStandaloneExportHtml(project, options = {}) {
   const family = fontPack.family || snapshot.family;
   const fontCss = fontPack.css || '';
   const headLinks = [...(fontPack.headLinks || [])];
+  // Not serialised here: the CJK base64 is ~22 MB and only gets joined when the
+  // document is actually assembled (see the end of this function).
+  const faces = fontPack.faces || [];
   // Only pull KaTeX CSS when the export actually contains rendered math markup.
   let katexCss = '';
   if (renderedMode) {
@@ -2092,7 +2200,7 @@ async function buildStandaloneExportHtml(project, options = {}) {
     tooBig: fontPack.tooBig || []
   };
 
-  return `<!DOCTYPE html>
+  const documentHtml = (embeddedCss, answer) => `<!DOCTYPE html>
 <html lang="${currentLang === 'zh' ? 'zh-CN' : 'en'}">
 <head>
   <meta charset="UTF-8">
@@ -2101,7 +2209,7 @@ async function buildStandaloneExportHtml(project, options = {}) {
   <title>${snapshot.title}</title>
   ${headLinks.join('\n  ')}
   <style>
-${fontCss}
+${embeddedCss}
 ${katexCss}
     @page { size: A4; margin: 18mm 16mm; }
     :root { color-scheme: light; }
@@ -2176,6 +2284,20 @@ ${katexCss}
   ${toolbarScript}
 </body>
 </html>`;
+
+  if (options.chunks === true) {
+    // Native print path: it writes the file itself, so return the document in
+    // pieces (template + text answers, then one base64 chunk per font). No step
+    // then has to build or transmit a ~22 MB string.
+    const html = documentHtml(serializeFontCss(fontPack));
+    return {
+      pieces: splitExportHtmlForChunks(html, fontPack),
+      faceCount: faces.length,
+      family,
+      report: lastExportFontReport
+    };
+  }
+  return documentHtml(serializeFontCss(fontPack));
 }
 
 
@@ -2250,6 +2372,26 @@ function showExportError(error) {
   showAlert('export-failed-detail');
 }
 
+// Failure alert with a "retry" button (same markup as showExportError).
+function showExportRetryAlert(key) {
+  const t = translations[currentLang] || translations['zh'];
+  const text = document.getElementById('alertText');
+  const modal = document.getElementById('alertModal');
+  const okBtn = document.getElementById('alertOk');
+  if (text && modal && okBtn) {
+    text.textContent = t[key] || key;
+    modal.classList.add('show');
+    okBtn.textContent = t['btn-retry'] || 'Retry';
+    okBtn.onclick = () => {
+      modal.classList.remove('show');
+      okBtn.textContent = t['btn-ok'] || t['btn-close'] || 'OK';
+      retryLastExport();
+    };
+    return;
+  }
+  showAlert(key);
+}
+
 // Filesystem.writeFile only accepts a plain base64 string. Passing raw HTML
 // makes Capacitor fail JSON.stringify on the plugin call → bare "Data cannot be
 // converted to a JSON value" and no share sheet. Always hand it base64.
@@ -2267,22 +2409,221 @@ function utf8ToBase64(text) {
 // embedded HTML has been dropped from memory.
 let lastExportPayload = null;
 
-async function shareExportHtml(html, filename) {
-  if (!getDraftNative()) throw new Error('native bridge missing');
-  await shareNativeFile(filename, utf8ToBase64(html), undefined, 'text/html');
+// Strips line breaks and spaces only. Never route an exported document through
+// atob()/decodeURIComponent: that is quadratic and hangs on a 22 MB payload.
+function normalizeBase64(base64) {
+  return String(base64 || '').replace(/[\r\n\t ]+/g, '');
 }
 
-async function printHtmlAsPdf(html, filename) {
-  lastExportPayload = { html, filename };
+// Filesystems.writeFile({ data }) runs every byte of `data` through
+// Base64.decode() *and* the plugin call through a Jenkins hash before the call
+// leaves the WebView. Skipping base64 entirely is only possible for text, so the
+// export is written as base64 — but straight to the cache dir, without the extra
+// copy shareNativeFile() makes for the share sheet.
+async function writeCacheFile(filename, base64) {
+  const native = getDraftNative();
+  if (!native) throw new Error('native bridge missing');
+  const path = `exports/${filename}`;
+  await native.Filesystem.writeFile({
+    path,
+    data: base64Payload(base64),
+    directory: native.Directory.Cache,
+    recursive: true
+  });
+  const uri = await native.Filesystem.getUri({ path, directory: native.Directory.Cache });
+  return uri.uri;
+}
+
+// Same file, shared through the Android share sheet.
+async function shareCacheFile(filename, base64, mimeType) {
+  const native = getDraftNative();
+  if (!native) throw new Error('native bridge missing');
+  const path = `exports/${filename}`;
+  const written = await native.Filesystem.writeFile({
+    path,
+    data: base64Payload(base64),
+    directory: native.Directory.Cache,
+    recursive: true
+  });
+  let uri = written && written.uri;
+  if (!uri) uri = await writeCacheFile(filename, base64);
+  try {
+    await native.Share.share({ title: filename, url: uri, dialogTitle: filename, ...(mimeType ? { files: [uri], mimeType } : {}) });
+  } catch (error) {
+    if (/cancel/i.test(String((error && error.message) || ''))) return;
+    throw error;
+  }
+}
+
+// One piece of splitExportHtmlForChunks() → plain base64 of its bytes. Odd
+// pieces are already the base64 of an embedded font and pass through untouched;
+// even pieces are template/text and get encoded individually (utf8 → base64).
+function pieceToBase64(piece, index) {
+  return index % 2 === 1 ? normalizeBase64(piece) : utf8ToBase64(piece);
+}
+
+// Joins the per-piece base64 so that Filesystem decodes it back to the exact
+// bytes of the document. Two pieces can only be concatenated directly when the
+// bytes seen so far end on a 3-byte boundary (and the next piece carries no '='
+// padding); anywhere else the boundary is rebuilt from the decoded bytes (see
+// base64Payload()).
+function piecesToBase64(pieces) {
+  // each piece's base64, plus whether it is a binary (font) piece
+  return pieces.map((piece, index) => ({ index, text: pieceToBase64(piece, index), binary: index % 2 === 1 }));
+}
+
+// Filesystem.writeFile({data}) base64-decodes exactly one string, so the pieces
+// of an export have to be handed over as a single base64 payload *string*.
+// Base64 packs 3 bytes into 4 characters, so two encoded pieces can only be glued
+// as characters while the earlier one ends on a 3-byte boundary (length % 4 === 0
+// and no padding). Anywhere else the boundary has to be re-encoded, and the only
+// correct way to do that is over the *bytes* the pieces stand for:
+//
+//   bytes(base64(a) + base64(b)) == bytes(a) ++ bytes(b)
+//
+// `tail` holds the < 3 leftover bytes of the last partial 3-byte group. Its
+// length — not the character count of the last piece — is the only reliable
+// "is the stream aligned?" signal: a piece whose base64 ended in '=' has had
+// that padding stripped here, so it contributes a partial group while its text
+// may still look aligned. The leftover bytes are prepended to the next piece
+// (which is decoded and re-encoded) or flushed on their own at the very end.
+// The ~22 MB font piece is copied as characters only when the stream really is
+// on a 3-byte boundary; otherwise it is decoded like any other piece.
+//
+// The payload is returned without trailing '=', because those bytes are implied
+// by the pieces themselves; Android's Base64 decoder restores them.
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+// Alphabet index of a base64 character code, or -1 for anything else.
+function base64Value(code) {
+  if (code >= 65 && code <= 90) return code - 65; // A-Z
+  if (code >= 97 && code <= 122) return code - 71; // a-z
+  if (code >= 48 && code <= 57) return code + 4; // 0-9
+  if (code === 43) return 62; // +
+  if (code === 47) return 63; // /
+  return -1;
+}
+
+// base64 (no padding required) → bytes. Used for the tiny text pieces only; the
+// multi-megabyte font piece is copied as characters and never decoded here.
+function base64ToBytes(base64) {
+  const clean = normalizeBase64(base64).replace(/=+$/, '');
+  const out = new Uint8Array(Math.floor(clean.length * 6 / 8));
+  let at = 0;
+  let buffer = 0;
+  let bits = 0;
+  for (let i = 0; i < clean.length; i += 1) {
+    const value = base64Value(clean.charCodeAt(i));
+    if (value < 0) continue;
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[at] = (buffer >> bits) & 0xff;
+      at += 1;
+    }
+  }
+  return out.subarray(0, at);
+}
+
+// bytes → base64, without the trailing '=' padding (the payload never carries
+// it; Android's decoder restores the missing bytes on its own).
+function bytesToBase64(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)];
+    if (i + 1 < bytes.length) out += B64_ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)];
+    if (i + 2 < bytes.length) out += B64_ALPHABET[b2 & 0x3f];
+  }
+  return out;
+}
+
+function base64Payload(parts) {
+  if (typeof parts === 'string') return normalizeBase64(parts).replace(/=+$/, '');
+  // [{ text, binary }] — every `text` is already base64.
+  const list = (parts || []).filter(part => part && part.text);
+  if (list.length === 0) return '';
+  if (list.length === 1) return normalizeBase64(list[0].text).replace(/=+$/, '');
+  // Decode each piece to raw bytes and concatenate. Text pieces are tiny, and a
+  // phase-aligned font piece is copied as characters instead (see below).
+  let out = '';
+  let tail = new Uint8Array(0); // bytes of a not-yet-emitted 3-byte group (0..2 bytes)
+  const flushTail = () => {
+    if (tail.length > 0) { out += bytesToBase64(tail); tail = new Uint8Array(0); }
+  };
+  for (const part of list) {
+    const text = normalizeBase64(part.text).replace(/=+$/, '');
+    // A font piece can be copied as characters only when the *byte* stream is on
+    // a 3-byte boundary. A previous piece whose base64 ended in '=' leaves a
+    // partial group behind even though the character count looks aligned, so the
+    // padding has to be tracked separately from the tail bytes.
+    if (part.binary && tail.length === 0 && text.length % 4 === 0) {
+      out += text;
+      continue;
+    }
+    const bytes = base64ToBytes(text);
+    if (tail.length === 0) {
+      // Aligned stream: complete 3-byte groups are identical before and after
+      // base64, so a (large) font piece can be copied as characters and only
+      // its last partial group has to go through bytes.
+      const aligned = bytes.length - (bytes.length % 3);
+      if (aligned > 0) {
+        out += part.binary ? text.slice(0, (aligned / 3) * 4) : bytesToBase64(bytes.subarray(0, aligned));
+      }
+      // Whatever is left over (< 3 bytes) must wait for the next piece, or be
+      // flushed at the very end — never emitted on its own.
+      tail = bytes.slice(aligned);
+      continue;
+    }
+    // Unaligned: glue the pending 0..2 bytes in front of this piece's bytes.
+    const merged = new Uint8Array(tail.length + bytes.length);
+    merged.set(tail, 0);
+    merged.set(bytes, tail.length);
+    const aligned = merged.length - (merged.length % 3);
+    out += bytesToBase64(merged.subarray(0, aligned));
+    tail = merged.slice(aligned);
+  }
+  flushTail();
+  return out;
+}
+
+// Share the standalone HTML document. `pieces` is the chunked form from
+// buildStandaloneExportHtml({ chunks: true }): the utf8→base64 conversion is
+// done piece by piece, so the WebView never holds two 22 MB copies at once.
+async function shareExportPieces(pieces, filename) {
+  await shareCacheFile(filename, piecesToBase64(pieces), 'text/html');
+}
+
+function htmlFromPieces(pieces) {
+  return pieces.join('');
+}
+
+// Print through the native PrintPlugin: the export HTML is written to
+// /data/data/<pkg>/cache/print/html/ through Filesystem (base64, piece by piece)
+// and the plugin loads that file in a hidden WebView, handing its
+// PrintDocumentAdapter to Android's print framework.
+async function printHtmlAsPdf(htmlOrPieces, filename) {
+  const pieces = Array.isArray(htmlOrPieces) ? htmlOrPieces : [htmlOrPieces];
+  lastExportPayload = { pieces, filename };
   const bridge = getPrintBridge();
   if (bridge) {
     try {
-      await bridge.printHtml({ fileName: filename, content: html });
+      // 22 MB of base64 as a plugin *argument* means Jenkins hash + JSON string
+      // + JSON parse + a second copy on the native side; writing the file
+      // directly keeps a single encoded copy alive.
+      await writeCacheFile(`print/${filename}`, piecesToBase64(pieces));
+      await bridge.printHtml({ fileName: filename, cachePath: `print/${filename}` });
+      // The native side owns its WebView until the print job is done; releasing
+      // it earlier is what produced truncated / blank PDFs.
       releasePrintBridge(bridge);
       return;
     } catch (error) {
       console.error('native print failed, falling back to sharing the HTML', error);
-      if (await shareExportHtml(html, filename).then(() => true, (e) => {
+      if (await shareExportPieces(pieces, filename).then(() => true, (e) => {
         console.error('share fallback failed', e);
         return false;
       })) {
@@ -2295,11 +2636,11 @@ async function printHtmlAsPdf(html, filename) {
   }
 
   try {
-    await shareExportHtml(html, filename);
+    await shareExportPieces(pieces, filename);
     showAlert('export-shared-html');
   } catch (error) {
     console.error('share export failed', error);
-    showAlert('export-failed-detail');
+    showExportError(error);
   }
 }
 
@@ -2307,7 +2648,7 @@ async function printHtmlAsPdf(html, filename) {
 async function retryLastExport() {
   const payload = lastExportPayload;
   if (!payload) return;
-  await printHtmlAsPdf(payload.html, payload.filename);
+  await printHtmlAsPdf(payload.pieces, payload.filename);
 }
 
 const CJK_EMBED_COPY = {
@@ -2416,37 +2757,58 @@ async function exportPdf(project, options = {}) {
   // behind a long silent build or leave the UI half-open.
   setExportBusy(true);
   let embedCjk = false;
+  // Native: the document stays split (chunks) so no single ~22 MB string is
+  // ever handed from one layer to the next. Browser: one HTML string.
+  const nativeApp = isNativeApp();
   let html = '';
+  let pieces = [];
+  let faceCount = 0;
   try {
     embedCjk = await chooseCjkEmbedding(project);
     if (embedCjk === null) return; // user cancelled — nothing happens
-    html = await buildStandaloneExportHtml(project, {
+    const built = await buildStandaloneExportHtml(project, {
       rendered: renderedMode,
-      printable: !isNativeApp(),
-      embedCjk
+      printable: !nativeApp,
+      embedCjk,
+      chunks: nativeApp
     });
+    if (nativeApp) {
+      pieces = built.pieces;
+      faceCount = built.faceCount;
+    } else {
+      html = built;
+    }
     // Remember the choice so the next export is one tap.
     Draft.cjkEmbedPref = embedCjk;
   } catch (error) {
     console.error('export build failed', error);
-    showAlert('export-failed');
+    showExportError(error);
     return;
   } finally {
     setExportBusy(false);
   }
 
-  if (isNativeApp()) {
+  if (nativeApp) {
     // Only jump to the in-app preview when exporting the rendered version.
     if (renderedMode && renderPreviewWindow) {
       renderDraftPreview(project);
       renderPreviewWindow.classList.add('show');
     }
     const filename = getExportFilename(project.title, 'html').replace(/\.html$/i, '.rendered.html');
-    // Offline PrintBridge writes a real PDF; browsers keep print + share the HTML.
-    await printHtmlAsPdf(html, filename);
-    if ((lastExportFontReport.needsSystemFonts || []).length) {
-      showAlert('export-needs-system-fonts');
+    // A document that failed to embed its fonts must not silently become a
+    // blank-looking PDF: say so, and put a retry on the alert.
+    const unreadable = (lastExportFontReport.tooBig || []).filter(item => item.reason === 'unreadable');
+    if (unreadable.length && faceCount === 0) {
+      console.warn('CJK font embed failed', unreadable);
+      lastExportPayload = { pieces, filename };
+      showExportRetryAlert('export-embed-failed');
+      return;
     }
+    // Offline PrintBridge writes a real PDF; browsers keep print + share the HTML.
+    await printHtmlAsPdf(pieces, filename);
+    // Be explicit about a font that was asked for but could not be embedded:
+    // that is exactly how a "blank looking" PDF used to be produced silently.
+    if ((lastExportFontReport.needsSystemFonts || []).length) showAlert('export-needs-system-fonts');
     return;
   }
 
