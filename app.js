@@ -1860,34 +1860,48 @@ async function fetchBase64Asset(relativePath) {
   return arrayBufferToBase64(await response.arrayBuffer());
 }
 
-// Assets are needed for their *bytes*, and the WebView cannot deliver them intact:
-// fetch() goes through WebViewLocalServer.handleLocalRequest(), which passes the
-// stream to a Reader, so every invalid UTF-8 byte becomes U+FFFD and the font
-// silently gains megabytes of garbage (measured: +7,155,357 bytes on the 16 MB
-// CJK face — that is what produced blank PDFs). CapacitorHttp is no answer
-// either: it dials a real socket to https://localhost, which the WebView serves
-// in-process only, so it simply fails.
+// Assets are needed for their *bytes*, and the Android WebView cannot hand a
+// large one to JS intact:
+//  - fetch() goes through WebViewLocalServer.handleLocalRequest(), which passes
+//    the stream to a Reader, so every invalid UTF-8 byte becomes U+FFFD and the
+//    font gains megabytes of garbage (measured: +7,155,357 bytes on the 16 MB
+//    CJK face — that is what produced blank PDFs).
+//  - CapacitorHttp dials a real socket to https://localhost, which the WebView
+//    serves in-process only, so it fails outright.
+//  - Returning the bytes from a plugin call is capped by the bridge itself: the
+//    result goes back as evaluateJavascript("window.Capacitor.fromNative(…)")
+//    and the WebView drops scripts of a few MB. The CJK face is 21.3 MB of
+//    base64, so it never arrived — while the 0.5 MB Cardo face did, which is
+//    exactly why only the CJK embed reported "could not be read".
 //
-// So the bytes are read natively (PrintPlugin.readAsset -> AssetManager.open,
-// base64 without an intermediate encoding). The fetch() branch is only for
-// browsers / editions without the plugin.
+// So native code *copies* the asset into the app cache (one small result), and
+// the page fetches that file: fetching a cache file keeps the body a Blob, so
+// arrayBuffer() yields every byte with no UTF-8 decoding. fetch() of the
+// original URL stays as the browser fallback.
 const assetBase64Cache = new Map();
+const stagedAssetUrls = new Map();
 
-function getAssetReader() {
+function getAssetStager() {
   const native = getDraftNative();
   const bridge = native && native.Print;
-  return bridge && typeof bridge.readAsset === 'function' ? bridge : null;
+  return bridge && typeof bridge.stageAsset === 'function' ? bridge : null;
 }
 
 async function fetchAssetBase64(relativePath) {
   const url = new URL(relativePath, window.location.href).href;
   if (assetBase64Cache.has(url)) return assetBase64Cache.get(url);
   let base64 = '';
-  const reader = getAssetReader();
-  if (reader) {
-    const response = await reader.readAsset({ path: relativePath });
-    if (!response || !response.base64) throw new Error(`Failed to read ${relativePath}`);
-    base64 = String(response.base64);
+  const stager = getAssetStager();
+  if (stager && isNativeApp()) {
+    // Stage once per asset; the staged copy is stable for this session.
+    if (!stagedAssetUrls.has(url)) {
+      const staged = await stager.stageAsset({ path: relativePath });
+      if (!staged || !staged.url) throw new Error(`Failed to stage ${relativePath}`);
+      stagedAssetUrls.set(url, staged.url);
+    }
+    const response = await fetch(stagedAssetUrls.get(url));
+    if (!response.ok) throw new Error(`Failed to read staged ${relativePath} (HTTP ${response.status})`);
+    base64 = arrayBufferToBase64(await response.arrayBuffer());
   } else {
     base64 = await fetchBase64Asset(relativePath);
   }

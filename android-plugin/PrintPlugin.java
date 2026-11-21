@@ -7,7 +7,6 @@ import android.os.Looper;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
-import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -141,42 +140,6 @@ public class PrintPlugin extends Plugin {
     }
 
     /**
-     * Reads a bundled web asset and returns it base64-encoded (no wrapping).
-     *
-     * The page cannot do this itself. The CJK font is 16 MB of binary, and every
-     * JS-side route to it goes through a text conversion that mangles it:
-     *   - fetch() hits the WebView local server, whose handleLocalRequest() hands
-     *     the stream to a Reader (invalid UTF-8 byte -> U+FFFD -> 3 bytes); on the
-     *     real font that is +7 MB of corruption, which is what produced blank
-     *     PDFs.
-     *   - CapacitorHttp dials a real socket to https://localhost, which the WebView
-     *     serves in-process only, so it fails outright ("could not be read").
-     * AssetManager.open() reads the same bytes the WebView would serve, with no
-     * decoding step at all, so base64 is exact by construction.
-     */
-    @PluginMethod
-    public void readAsset(final PluginCall call) {
-        final String path = call.getString("path");
-        if (path == null || path.isEmpty()) {
-            call.reject("readAsset: missing path");
-            return;
-        }
-        new Thread(() -> {
-            try {
-                String clean = normalizeAssetPath(path);
-                byte[] bytes = readAssetBytes(clean);
-                JSObject result = new JSObject();
-                result.put("path", clean);
-                result.put("bytes", bytes.length);
-                result.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
-                call.resolve(result);
-            } catch (Exception error) {
-                call.reject("readAsset failed: " + error.getMessage(), error);
-            }
-        }).start();
-    }
-
-    /**
      * "fonts/x.ttf" or "/fonts/x.ttf" -> "public/fonts/x.ttf". Capacitor copies
      * webDir into assets/public, so that prefix is added here; anything that would
      * walk out of the assets tree is refused.
@@ -222,6 +185,46 @@ public class PrintPlugin extends Plugin {
             if (bytes.length == 0) throw new IOException("asset is empty: " + assetPath);
             return bytes;
         }
+    }
+
+    /**
+     * Copies a bundled web asset into the app cache and returns a file:// URL.
+     *
+     * Why not just return the bytes: a plugin call result goes back through
+     * MessageHandler.legacySendResponseMessage() as
+     * evaluateJavascript("window.Capacitor.fromNative(" + json + ")"), and the
+     * WebView drops scripts of a few MB. The 16 MB CJK face is 21.3 MB of
+     * base64, so it silently never arrives (the small Cardo face survives,
+     * which is why only the CJK embed failed). Writing a file keeps the bridge
+     * traffic tiny; the page then fetches the file and streams it itself.
+     */
+    @PluginMethod
+    public void stageAsset(final PluginCall call) {
+        final String path = call.getString("path");
+        if (path == null || path.isEmpty()) {
+            call.reject("stageAsset: missing path");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                String clean = normalizeAssetPath(path);
+                byte[] bytes = readAssetBytes(clean);
+                File dir = new File(getActivity().getCacheDir(), "assets");
+                if (!dir.exists() && !dir.mkdirs()) throw new IOException("cannot create cache dir");
+                File file = new File(dir, sanitize(clean));
+                try (FileOutputStream out = new FileOutputStream(file)) {
+                    out.write(bytes);
+                }
+                JSObject result = new JSObject();
+                result.put("path", file.getAbsolutePath());
+                result.put("url", file.toURI().toString());
+                result.put("bytes", bytes.length);
+                Log.d(TAG, "staged " + clean + " -> " + file.getAbsolutePath() + " (" + bytes.length + " bytes)");
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject("stageAsset failed: " + error.getMessage(), error);
+            }
+        }).start();
     }
 
     /**
