@@ -195,6 +195,13 @@ jobs:
             echo "::error::PrintPlugin class not found in $APK (Kotlin/Java source not compiled)"
             exit 1
           fi
+          # The page reads font bytes through readAsset(); if that method is not in
+          # the dex, the export falls back to a WebView path that corrupts binary
+          # and silently produces blank PDFs.
+          if ! unzip -p "$APK" 'classes*.dex' | grep -aq 'readAsset'; then
+            echo "::error::PrintPlugin.readAsset not found in $APK (font embedding would fall back to a lossy path)"
+            exit 1
+          fi
           echo "PrintPlugin is compiled into the APK"
 
       - name: Package named APK

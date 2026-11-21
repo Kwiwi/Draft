@@ -1860,31 +1860,34 @@ async function fetchBase64Asset(relativePath) {
   return arrayBufferToBase64(await response.arrayBuffer());
 }
 
-// Assets are fetched for their bytes, so they are read through CapacitorHttp's
-// arraybuffer response. A plain fetch() is NOT safe here: in the Android WebView
-// the local server (WebViewLocalServer) hands everything through
-// HttpRequestHandler.readStreamAsString(), i.e. a Reader that mangles the binary
-// (any invalid UTF-8 byte decodes to U+FFFD, which then encodes to 3 bytes), and
-// that corruption silently produced *blank* PDFs once the CJK base64 was inlined
-// the old way. The arraybuffer path returns the stream base64-encoded untouched.
+// Assets are needed for their *bytes*, and the WebView cannot deliver them intact:
+// fetch() goes through WebViewLocalServer.handleLocalRequest(), which passes the
+// stream to a Reader, so every invalid UTF-8 byte becomes U+FFFD and the font
+// silently gains megabytes of garbage (measured: +7,155,357 bytes on the 16 MB
+// CJK face — that is what produced blank PDFs). CapacitorHttp is no answer
+// either: it dials a real socket to https://localhost, which the WebView serves
+// in-process only, so it simply fails.
+//
+// So the bytes are read natively (PrintPlugin.readAsset -> AssetManager.open,
+// base64 without an intermediate encoding). The fetch() branch is only for
+// browsers / editions without the plugin.
 const assetBase64Cache = new Map();
+
+function getAssetReader() {
+  const native = getDraftNative();
+  const bridge = native && native.Print;
+  return bridge && typeof bridge.readAsset === 'function' ? bridge : null;
+}
 
 async function fetchAssetBase64(relativePath) {
   const url = new URL(relativePath, window.location.href).href;
   if (assetBase64Cache.has(url)) return assetBase64Cache.get(url);
-  const native = getDraftNative();
   let base64 = '';
-  if (native && native.CapacitorHttp && isNativeApp()) {
-    const response = await native.CapacitorHttp.get({
-      url,
-      responseType: 'arraybuffer',
-      connectTimeout: 15000,
-      readTimeout: 60000
-    });
-    if (!response || response.status !== 200 || !response.data) {
-      throw new Error(`Failed to fetch ${relativePath} (HTTP ${response && response.status})`);
-    }
-    base64 = String(response.data);
+  const reader = getAssetReader();
+  if (reader) {
+    const response = await reader.readAsset({ path: relativePath });
+    if (!response || !response.base64) throw new Error(`Failed to read ${relativePath}`);
+    base64 = String(response.base64);
   } else {
     base64 = await fetchBase64Asset(relativePath);
   }

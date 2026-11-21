@@ -7,6 +7,7 @@ import android.os.Looper;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
+import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,9 +21,11 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.regex.Matcher;
@@ -135,6 +138,90 @@ public class PrintPlugin extends Plugin {
     private String readFile(File file) throws IOException {
         byte[] bytes = Files.readAllBytes(file.toPath());
         return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Reads a bundled web asset and returns it base64-encoded (no wrapping).
+     *
+     * The page cannot do this itself. The CJK font is 16 MB of binary, and every
+     * JS-side route to it goes through a text conversion that mangles it:
+     *   - fetch() hits the WebView local server, whose handleLocalRequest() hands
+     *     the stream to a Reader (invalid UTF-8 byte -> U+FFFD -> 3 bytes); on the
+     *     real font that is +7 MB of corruption, which is what produced blank
+     *     PDFs.
+     *   - CapacitorHttp dials a real socket to https://localhost, which the WebView
+     *     serves in-process only, so it fails outright ("could not be read").
+     * AssetManager.open() reads the same bytes the WebView would serve, with no
+     * decoding step at all, so base64 is exact by construction.
+     */
+    @PluginMethod
+    public void readAsset(final PluginCall call) {
+        final String path = call.getString("path");
+        if (path == null || path.isEmpty()) {
+            call.reject("readAsset: missing path");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                String clean = normalizeAssetPath(path);
+                byte[] bytes = readAssetBytes(clean);
+                JSObject result = new JSObject();
+                result.put("path", clean);
+                result.put("bytes", bytes.length);
+                result.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject("readAsset failed: " + error.getMessage(), error);
+            }
+        }).start();
+    }
+
+    /**
+     * "fonts/x.ttf" or "/fonts/x.ttf" -> "public/fonts/x.ttf". Capacitor copies
+     * webDir into assets/public, so that prefix is added here; anything that would
+     * walk out of the assets tree is refused.
+     */
+    private String normalizeAssetPath(String path) throws IOException {
+        String clean = path.trim();
+        while (clean.startsWith("/")) clean = clean.substring(1);
+        if (!clean.startsWith("public/")) clean = "public/" + clean;
+        if (!new File(clean).getCanonicalPath().equals(clean)) {
+            throw new IOException("asset path escapes assets: " + path);
+        }
+        return clean;
+    }
+
+    /**
+     * Older Capacitor layouts kept webDir at the assets root, so fall back to the
+     * unprefixed path before giving up.
+     */
+    private byte[] readAssetBytes(String cleanPath) throws IOException {
+        try {
+            return readAssetStream(cleanPath);
+        } catch (IOException first) {
+            if (cleanPath.startsWith("public/")) {
+                try {
+                    return readAssetStream(cleanPath.substring("public/".length()));
+                } catch (IOException ignored) {
+                    // report the original failure, it is the clearer one
+                }
+            }
+            throw first;
+        }
+    }
+
+    private byte[] readAssetStream(String assetPath) throws IOException {
+        try (InputStream in = getContext().getAssets().open(assetPath)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            byte[] bytes = out.toByteArray();
+            if (bytes.length == 0) throw new IOException("asset is empty: " + assetPath);
+            return bytes;
+        }
     }
 
     /**

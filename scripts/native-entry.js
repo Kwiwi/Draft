@@ -1,4 +1,4 @@
-import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -9,7 +9,6 @@ const Print = registerPlugin('Print');
 
 window.DraftNative = {
   Capacitor,
-  CapacitorHttp,
   App,
   Filesystem,
   Directory,
