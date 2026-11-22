@@ -384,6 +384,41 @@ button:focus-visible,
 }
 .folder-picker input,
 .folder-picker-options input { margin: 0; }
+/* Lists living inside the drawer scroll with the drawer body (.drawer-body
+   owns the scroll), so they must not be absolutely positioned popovers and
+   must not carry their own overflow box — nesting both is what made the
+   Add to folder list jitter and scroll by only a little. */
+.export-options.in-flow,
+.folder-picker-options.in-flow {
+  position: static;
+  top: auto;
+  right: auto;
+  left: auto;
+  display: none;
+  max-height: none;
+  overflow: visible;
+  margin-top: 8px;
+  border: 0;
+  border-top: 1px solid var(--color-border-soft);
+  box-shadow: none;
+  background: transparent;
+  /* Keep momentum scrolling on this element from chaining to the page behind. */
+  overscroll-behavior: contain;
+}
+.export-options.in-flow.show,
+.folder-picker-options.in-flow.show {
+  display: block;
+}
+#folderManageListWrap .folder-picker-options {
+  position: static;
+  top: auto;
+  display: block;
+  margin-top: 8px;
+  max-height: none;
+  overflow: visible;
+  border-top: 1px solid var(--color-border-soft);
+  overscroll-behavior: contain;
+}
 #folderManageListWrap .folder-picker-options {
   position: relative;
   top: 0;
@@ -1055,8 +1090,13 @@ body.edit-page .mode-bar {
 
 .drawer-body {
   flex: 1;
+  /* min-height:0 lets the flex child actually shrink and scroll instead of
+     overflowing the fixed-height drawer, which broke touch scrolling. */
+  min-height: 0;
   padding: 16px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .drawer-row {

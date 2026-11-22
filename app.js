@@ -8,6 +8,8 @@ let Draft = {
   drawerProjectId: null,
   drawerFolderId: null,
   deleteFolderId: null,
+  // Where the open draft was launched from, so its Back returns one level up.
+  viewOrigin: null,
   nameModalMode: null,
 };
 
@@ -834,6 +836,7 @@ function deleteFolder(id, includeDrafts, includeFolders) {
   if (Draft.folderId && removed.has(Draft.folderId)) {
     Draft.folderId = parentId;
     Draft.homeType = 'folders';
+    resetViewOrigin();
   }
   if (Draft.folderId && !getFolder(Draft.folderId)) Draft.folderId = null;
   updateHomeControls();
@@ -997,6 +1000,7 @@ projectList.addEventListener('click', (e) => {
   if (card.dataset.folderId) {
     Draft.folderId = card.dataset.folderId;
     Draft.homeType = 'folders';
+    resetViewOrigin();
     updateHomeControls();
     renderProjects();
     return;
@@ -1086,6 +1090,7 @@ function showDraftHome() {
   Draft.homeType = 'drafts';
   Draft.folderId = null;
   Draft.mode = 'home';
+  resetViewOrigin();
   updateHomeControls();
   renderProjects();
 }
@@ -1094,6 +1099,7 @@ function showFolderHome() {
   Draft.homeType = 'folders';
   Draft.folderId = null;
   Draft.mode = 'home';
+  resetViewOrigin();
   updateHomeControls();
   renderProjects();
 }
@@ -1133,6 +1139,7 @@ function saveNameModal() {
     });
     saveFolders(folders);
     Draft.homeType = 'folders';
+    resetViewOrigin();
     closeNameModal();
     updateHomeControls();
     renderProjects();
@@ -1467,6 +1474,7 @@ function handleHomeTabClick() {
     if (Draft.folderId) {
       const current = getFolder(Draft.folderId);
       Draft.folderId = current && current.parentId ? current.parentId : null;
+      resetViewOrigin();
       updateHomeControls();
       renderProjects();
       return;
@@ -1488,6 +1496,11 @@ function openProject(id) {
   saveProjects(projects);
 
   Draft.currentProjectId = id;
+  // Remember the folder we were browsing so Back lands there, not on the drafts home.
+  Draft.viewOrigin = {
+    homeType: Draft.homeType,
+    folderId: Draft.folderId || null
+  };
   savedEditorSelection = null;
   hideSelectionToolbar();
   Draft.mode = "view";
@@ -2982,12 +2995,20 @@ function setupAndroidBackButton() {
 }
 
 // ===== 返回首页 =====
+// Back from a draft returns one level up: the folder it was opened from,
+// otherwise the drafts home.
 function goHome() {
+  const origin = Draft.viewOrigin;
+  Draft.viewOrigin = null;
   Draft.currentProjectId = null;
   Draft.mode = 'home';
   Draft.dirty = false;
-  Draft.homeType = 'drafts';
-  Draft.folderId = null;
+  Draft.homeType = origin ? origin.homeType : 'drafts';
+  Draft.folderId = origin ? origin.folderId : null;
+  // The remembered folder may have been deleted while the draft was open.
+  if (Draft.homeType === 'folders' && Draft.folderId && !getFolder(Draft.folderId)) {
+    Draft.folderId = null;
+  }
   savedEditorSelection = null;
   hideSelectionToolbar();
   document.body.classList.remove('edit-page');
@@ -3000,6 +3021,12 @@ function goHome() {
   updateHomeControls();
   syncTabs();
   renderProjects();
+}
+
+// Leaving into a folder (create/delete flows, fallback shortcut) is a real
+// navigation, so a cached "opened from" target must not outlive it.
+function resetViewOrigin() {
+  Draft.viewOrigin = null;
 }
 
 // ===== 自动保存 =====
@@ -3263,12 +3290,23 @@ function renderManageDraftList(mode) {
   if (!listWrap || !list) return;
   list.innerHTML = '';
   const projects = getProjects().slice().sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
-  const rows = mode === 'remove' ? projects.filter(project => (project.folderIds || []).includes(folderId)) : projects;
-  if (!rows.length) {
+  // Add only offers drafts that live nowhere (each draft belongs to one folder);
+  // Remove lists what is in this folder; blank mode is the unfiltered overview.
+  const inFolder = project => (project.folderIds || []).includes(folderId);
+  let rows = projects;
+  if (mode === 'remove') rows = projects.filter(inFolder);
+  else if (mode === 'add') rows = projects.filter(project => !isFiledInFolder(project));
+  const appendEmpty = () => {
     const empty = document.createElement('div');
+    empty.className = 'manage-list-empty';
     empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
-    empty.textContent = tKey('empty-projects', 'No drafts yet');
+    empty.textContent = mode === 'add'
+      ? tKey('manage-add-empty', 'No drafts left to add')
+      : tKey('empty-projects', 'No drafts yet');
     list.appendChild(empty);
+  };
+  if (!rows.length) {
+    appendEmpty();
   } else {
     rows.forEach(project => {
       const label = document.createElement('label');
@@ -3279,13 +3317,25 @@ function renderManageDraftList(mode) {
         const all = getProjects();
         const current = all.find(entry => entry.id === project.id);
         if (!current) return;
+        const wasIn = (current.folderIds || []).includes(folderId);
         const ids = new Set(current.folderIds || []);
-        if (checkbox.checked) ids.add(folderId); else ids.delete(folderId);
+        if (checkbox.checked) {
+          // One folder per draft: checking a new one moves it here.
+          ids.clear();
+          ids.add(folderId);
+        } else {
+          ids.delete(folderId);
+        }
+        const isIn = ids.has(folderId);
         current.folderIds = Array.from(ids);
         current.updatedAt = Date.now();
         saveProjects(all);
         renderProjects();
-        if (mode === 'remove' && !checkbox.checked) label.remove();
+        // The row no longer belongs to this list whichever way it was toggled.
+        if (wasIn !== isIn) {
+          label.remove();
+          if (!list.querySelector('label')) appendEmpty();
+        }
       });
       const text = document.createElement('span');
       text.textContent = project.title || tKey('placeholder-title', 'Untitled');
@@ -3298,6 +3348,7 @@ function renderManageDraftList(mode) {
   if (manageOptions) manageOptions.classList.remove('show');
   listWrap.classList.remove('hidden');
   list.classList.add('show');
+  listWrap.dataset.mode = mode;
 }
 
 function saveDrawerSettings() {
@@ -3625,8 +3676,27 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   const manageRemove = document.getElementById('manageRemoveDrafts');
   const manageAdd = document.getElementById('manageAddDrafts');
-  if (manageRemove) manageRemove.addEventListener('click', (e) => { e.stopPropagation(); renderManageDraftList('remove'); });
-  if (manageAdd) manageAdd.addEventListener('click', (e) => { e.stopPropagation(); renderManageDraftList('add'); });
+  // When the list is hidden while the drawer is being torn down, drop the mode too.
+  const manageListWrap = document.getElementById('folderManageListWrap');
+  if (manageListWrap) {
+    new MutationObserver(() => {
+      if (manageListWrap.classList.contains('hidden')) manageListWrap.dataset.mode = '';
+    }).observe(manageListWrap, { attributes: true, attributeFilter: ['class'] });
+  }
+  // A second tap on the same button closes the list again.
+  const toggleManageList = (mode) => {
+    const listWrap = document.getElementById('folderManageListWrap');
+    if (listWrap && !listWrap.classList.contains('hidden') && listWrap.dataset.mode === mode) {
+      listWrap.classList.add('hidden');
+      const list = document.getElementById('folderManageList');
+      if (list) list.classList.remove('show');
+      listWrap.dataset.mode = '';
+      return;
+    }
+    renderManageDraftList(mode);
+  };
+  if (manageRemove) manageRemove.addEventListener('click', (e) => { e.stopPropagation(); toggleManageList('remove'); });
+  if (manageAdd) manageAdd.addEventListener('click', (e) => { e.stopPropagation(); toggleManageList('add'); });
   if (drawerRename) drawerRename.addEventListener('click', () => {
     if (Draft.drawerFolderId) {
       const folder = getFolder(Draft.drawerFolderId);

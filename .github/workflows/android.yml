@@ -96,6 +96,10 @@ jobs:
         if: steps.want.outputs.run == 'true'
         run: npm install
 
+      - name: Navigation/list regression checks
+        if: steps.want.outputs.run == 'true'
+        run: node scripts/test-navigation.js
+
       - name: Build web assets (${{ matrix.edition }})
         if: steps.want.outputs.run == 'true'
         run: npm run ${{ matrix.build }}
