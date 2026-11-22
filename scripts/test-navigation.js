@@ -76,8 +76,22 @@ class El {
   removeAttribute(k) { delete this.attributes[k]; }
   hasAttribute(k) { return k in this.attributes; }
   closest() { return null; }
-  querySelector() { return null; }
-  querySelectorAll() { return []; }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  querySelectorAll(sel) {
+    const want = sel.replace(/^\*/, '');
+    const out = [];
+    const walk = el => el.children.forEach(child => {
+      if (!want || child.tagName === want.toUpperCase()) out.push(child);
+      walk(child);
+    });
+    walk(this);
+    return out;
+  }
+  contains(el) {
+    let cur = el;
+    while (cur) { if (cur === this) return true; cur = cur.parentNode; }
+    return false;
+  }
   scrollIntoView() {}
   scrollTo() {}
   focus() {}
@@ -169,9 +183,13 @@ sandbox.self = sandbox;
 // seed data
 const FOLDER_A = 'fa';
 const FOLDER_B = 'fb';
+const FOLDER_A1 = 'fa1';
+const FOLDER_A1A = 'fa1a';
 store['draft_folders'] = JSON.stringify([
   { id: FOLDER_A, title: 'Alpha', parentId: null, importance: 0 },
-  { id: FOLDER_B, title: 'Beta', parentId: null, importance: 0 }
+  { id: FOLDER_B, title: 'Beta', parentId: null, importance: 0 },
+  { id: FOLDER_A1, title: 'Alpha One', parentId: FOLDER_A, importance: 0 },
+  { id: FOLDER_A1A, title: 'Alpha One Deep', parentId: FOLDER_A1, importance: 0 }
 ]);
 store['draft_projects'] = JSON.stringify([
   { id: 'p1', title: 'In Alpha', content: '', folderIds: [FOLDER_A], updatedAt: 1 },
@@ -185,7 +203,7 @@ const code = fs.readFileSync(path.join(ROOT, 'i18n.js'), 'utf8') + '\n;\n' +
 vm.createContext(sandbox);
 vm.runInContext(code, sandbox, { filename: 'app.js' });
 
-const api = vm.runInContext('({ Draft, goHome, openProject, showDraftHome, renderManageDraftList, renderFolderPicker, getProjects })', sandbox);
+const api = vm.runInContext('({ Draft, goHome, openProject, showDraftHome, renderManageDraftList, renderFolderPicker, getFolders, isFolderExpanded, expandedTreeFolders })', sandbox);
 const Draft = api.Draft;
 
 // ---------- assertions ----------
@@ -219,11 +237,14 @@ Draft.homeType = 'folders';
 Draft.folderId = FOLDER_B;
 api.openProject('p3');
 store['draft_folders'] = JSON.stringify([{ id: FOLDER_A, title: 'Alpha', parentId: null }]);
+
 api.goHome();
 check('back after folder deletion falls back to folders root', Draft.mode === 'home' && Draft.homeType === 'folders' && Draft.folderId === null);
 store['draft_folders'] = JSON.stringify([
   { id: FOLDER_A, title: 'Alpha', parentId: null },
-  { id: FOLDER_B, title: 'Beta', parentId: null }
+  { id: FOLDER_B, title: 'Beta', parentId: null },
+  { id: FOLDER_A1, title: 'Alpha One', parentId: FOLDER_A },
+  { id: FOLDER_A1A, title: 'Alpha One Deep', parentId: FOLDER_A1 }
 ]);
 
 // 4. Explicit tab navigation drops the cached origin.
@@ -233,51 +254,84 @@ api.openProject('p3');
 api.showDraftHome();
 check('showDraftHome clears origin', Draft.viewOrigin === null);
 
-// 5. Manage -> Add drafts lists only unfiled drafts.
+// 5. Manage -> Add drafts: unattached drafts at the top, folders as a tree.
 const list = getEl('folderManageList');
 getEl('folderManageListWrap');
 getEl('folderManageOptions');
+getEl('projectDrawer');
+const titlesOf = () => list.children.map(c => {
+  const span = c.tagName === 'LABEL' ? c.children[1] : c.children[1];
+  return span ? span.textContent : '';
+});
 Draft.drawerFolderId = FOLDER_A;
 api.renderManageDraftList('add');
-let titles = list.children.map(c => (c.children[1] ? c.children[1].textContent : ''));
-// p3 already lives in Beta (and may stay there). A draft can be in several
-// folders, so Add only hides drafts that are *already in this folder*.
-check('add list excludes only drafts already in this folder',
-  JSON.stringify(titles) === JSON.stringify(['In Beta', 'Loose', 'Loose too']));
+check('add list starts with the loose drafts',
+  JSON.stringify(titlesOf().slice(0, 2)) === JSON.stringify(['Loose', 'Loose too']));
+check('add list then shows only outermost folders',
+  JSON.stringify(titlesOf().slice(2)) === JSON.stringify(['Alpha', 'Beta']));
 
-// checking one files it here, keeps its other folders, and drops the row
-const row = list.children.find(c => c.children[1].textContent === 'In Beta');
-const box = row.children[0];
-box.checked = true;
-box.dispatch('change');
+// open Alpha: its nested folder and its drafts appear, Beta stays put
+const caretFor = title => list.children.find(row => {
+  const span = row.children[1];
+  return span && span.textContent === title;
+}).children[0];
+caretFor('Alpha').dispatch('click', { stopPropagation() {}, preventDefault() {} });
+check('opening a folder reveals its child folder',
+  titlesOf().includes('Alpha One'));
+// Alpha's only draft (p1) is already in Alpha, so its branch has just the
+// nested folder; a *loose* draft is never nested (it is listed at the top).
+check('a nested draft is listed under the folder it belongs to',
+  titlesOf().slice(0, 5).join('|') === 'Loose|Loose too|Alpha|In Beta|Alpha One');
+check('a closed branch shows nothing of its contents',
+  titlesOf()[5] === 'Beta');
+check('sibling top-level folder stays closed',
+  !titlesOf().includes('Alpha One Deep'));
+
+// second level needs a second open
+caretFor('Alpha One').dispatch('click', { stopPropagation() {}, preventDefault() {} });
+check('deeper folders nest another level', titlesOf().includes('Alpha One Deep'));
+
+// checking a draft that already lives in Beta files it here too, and keeps Beta
+// p3 lives in Beta, so it shows up nested under Beta once that branch is open.
+caretFor('Beta').dispatch('click', { stopPropagation() {}, preventDefault() {} });
+const nested = list.children.find(row => row.tagName === 'LABEL' && row.children[1].textContent === 'In Beta');
+const nestedBox = nested.children[0];
+nestedBox.checked = true;
+nestedBox.dispatch('change');
 const beta = JSON.parse(store['draft_projects']).find(p => p.id === 'p3');
-check('checking a draft adds this folder', beta.folderIds.includes(FOLDER_A));
-check('checking a draft keeps its other folders', beta.folderIds.includes(FOLDER_B));
-check('checked row leaves the add list', !list.children.includes(row));
+check('checking a nested draft adds this folder', beta.folderIds.includes(FOLDER_A));
+check('a cross-folder draft leaves the add tree', !list.children.some(r => r.tagName === 'LABEL' && r.children[1].textContent === 'In Beta'));
+check('checking a nested draft keeps its other folder', beta.folderIds.includes(FOLDER_B));
 
-// 6. Remove drafts only lists drafts in this folder, and unchecking drops the row
-// (and only removes *this* folder).
+// expansion survives the re-render that follows a toggle
+check('open branches stay open after a toggle', titlesOf().includes('Alpha One Deep'));
+
+// 6. Remove lists what is in this folder, flat.
 api.renderManageDraftList('remove');
-titles = list.children.map(c => (c.children[1] ? c.children[1].textContent : ''));
 check('remove list only shows drafts in this folder',
-  JSON.stringify(titles) === JSON.stringify(['In Alpha', 'In Beta']));
-const rmRow = list.children.find(c => c.children[1].textContent === 'In Beta');
+  JSON.stringify(titlesOf()) === JSON.stringify(['In Alpha', 'In Beta']));
+const rmRow = list.children.find(row => row.children[1].textContent === 'In Beta');
 const rmBox = rmRow.children[0];
 rmBox.checked = false;
 rmBox.dispatch('change');
 const betaAfter = JSON.parse(store['draft_projects']).find(p => p.id === 'p3');
 check('unchecking removes only this folder',
   !betaAfter.folderIds.includes(FOLDER_A) && betaAfter.folderIds.includes(FOLDER_B));
-check('unchecked row leaves the remove list', !list.children.includes(rmRow));
 
-// 6b. Switching modes rebuilds the list cleanly.
-api.renderManageDraftList('add');
-check('add list rebuilds after switching modes',
-  list.children.map(c => c.children[1].textContent).join('|') === 'In Beta|Loose|Loose too');
-
-// 7. Folder picker ("Add to folder") still works for a draft.
-api.renderFolderPicker(JSON.parse(store['draft_projects']).find(p => p.id === 'p3'), false);
-check('folder picker renders without throwing', true);
+// 7. Add-to-folder picker shows outermost folders only, with expandable branches.
+const picker = getEl('folderPicker');
+const p3 = JSON.parse(store['draft_projects']).find(p => p.id === 'p3');
+api.renderFolderPicker(p3, false);
+const pickerTitles = () => picker.children.map(row => row.children[1].children[1].textContent);
+check('picker lists only outermost folders',
+  JSON.stringify(pickerTitles()) === JSON.stringify(['Alpha', 'Beta']));
+picker.children[0].children[0].dispatch('click', { stopPropagation() {}, preventDefault() {} });
+check('picker caret reveals the nested folder', pickerTitles().includes('Alpha One'));
+check('picker branch is indented', picker.children[1].style.paddingLeft === '26px');
+// A folder being moved may not be dropped into its own subtree.
+api.renderFolderPicker({ id: FOLDER_A, title: 'Alpha', parentId: null }, true);
+check('picker hides the folder itself (no self-parenting)',
+  !pickerTitles().includes('Alpha'));
 
 console.log(failures ? 'NAVTEST_FAILED ' + failures : 'NAVTEST_OK');
 process.exitCode = failures ? 1 : 0;

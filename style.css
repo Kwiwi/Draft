@@ -360,30 +360,71 @@ button:focus-visible,
   max-height: 240px;
   overflow: auto;
 }
-.folder-picker label,
-.folder-picker-options label {
+/* ---------- Collapsible folder tree (Add to folder / Manage > Add drafts) ---------- */
+.folder-picker-options .tree-row,
+#folderManageListWrap .tree-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   width: 100%;
-  padding: 8px 10px;
-  border: 0;
+  min-height: 34px;
+  padding: 0 10px 0 0;
   border-bottom: 1px solid var(--color-border-soft);
-  background: var(--color-surface);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+}
+.folder-picker-options .tree-row:last-child,
+#folderManageListWrap .tree-row:last-child { border-bottom: 0; }
+.folder-picker-options .tree-row:hover,
+#folderManageListWrap .tree-row:hover { background: var(--accent-soft); }
+/* Caret: 24px of touch target that also keeps every label's checkbox aligned. */
+.tree-toggle {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tree-toggle.empty { visibility: hidden; cursor: default; }
+.tree-toggle:not(.empty):hover { color: var(--accent-color); }
+/* A row that carries a checkbox is itself clickable. */
+.tree-label,
+.folder-picker-options label.tree-row,
+#folderManageListWrap label.tree-row {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
   color: var(--color-text);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
-.folder-picker label:last-child,
-.folder-picker-options label:last-child { border-bottom: 0; }
-.folder-picker label:hover,
-.folder-picker-options label:hover {
-  background: var(--accent-soft);
-  color: var(--accent-color);
+.tree-label span,
+.tree-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row input[type="checkbox"],
+.tree-label input[type="checkbox"] { flex: 0 0 auto; margin: 0; }
+.tree-folder-name { flex: 1 1 auto; color: var(--color-text); }
+.tree-note {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  white-space: nowrap;
 }
-.folder-picker input,
-.folder-picker-options input { margin: 0; }
+
 /* Lists living inside the drawer scroll with the drawer body (.drawer-body
    owns the scroll), so they must not be absolutely positioned popovers and
    must not carry their own overflow box — nesting both is what made the

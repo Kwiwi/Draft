@@ -3148,6 +3148,73 @@ document.querySelectorAll('.mode-tab').forEach((tab, index) => {
   });
 });
 
+// ===== 折叠树（合集层级列表）=====
+// Remembering which folders are expanded keeps a re-render (after checking a
+// box) from collapsing the branch the user just worked in.
+const expandedTreeFolders = { picker: new Set(), manageAdd: new Set() };
+
+function isFolderExpanded(scope, folderId) {
+  return expandedTreeFolders[scope].has(folderId);
+}
+
+function toggleFolderExpanded(scope, folderId) {
+  const set = expandedTreeFolders[scope];
+  if (set.has(folderId)) set.delete(folderId); else set.add(folderId);
+  if (scope === 'picker') renderFolderPicker(...(folderPickerContext || []));
+  else renderManageDraftList('add');
+}
+
+// Which item an add-to-folder picker is editing — the disclosure arrows re-render
+// the whole picker, so the context has to outlive a single call.
+let folderPickerContext = null;
+
+// A caret for a collapsible row; anything without children gets a spacer so all
+// labels line up. stopPropagation keeps it from also toggling the checkbox.
+function createTreeToggle(hasChildren, expanded, scope, folderId) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = hasChildren ? 'tree-toggle' : 'tree-toggle empty';
+  button.innerHTML = hasChildren ? (expanded ? '&#9662;' : '&#9656;') : '';
+  if (!hasChildren) button.disabled = true;
+  else {
+    button.title = expanded ? 'Collapse' : 'Expand';
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      event.preventDefault();
+      toggleFolderExpanded(scope, folderId);
+    });
+  }
+  return button;
+}
+
+// Top-level rows are always visible; nested ones only when their parent is open.
+function isFolderRowVisible(folder, isExpanded) {
+  if (!folder.parentId) return true;
+  return Boolean(isExpanded(folder.parentId));
+}
+
+// A draft row shows a "filed" marker only where the list is about "not in this
+// folder" (Add to folder); the Manage list omits it.
+function createDraftRow(project, options) {
+  const label = document.createElement('label');
+  label.className = 'tree-row';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = Boolean(options.checked);
+  checkbox.addEventListener('change', () => options.onToggle(checkbox, label));
+  const text = document.createElement('span');
+  text.textContent = project.title || tKey('placeholder-title', 'Untitled');
+  label.appendChild(checkbox);
+  label.appendChild(text);
+  if (options.availableIn && options.availableIn.length) {
+    const hint = document.createElement('span');
+    hint.className = 'tree-note';
+    hint.textContent = options.availableIn.join(' · ');
+    label.appendChild(hint);
+  }
+  return label;
+}
+
 // ===== 抽屉面板 =====
 function hideDrawerMenus() {
   document.querySelectorAll('#projectDrawer .export-options').forEach(el => {
@@ -3162,6 +3229,7 @@ function renderFolderPicker(item, isFolder) {
   if (isFolder === void 0) isFolder = false;
   const picker = document.getElementById('folderPicker');
   if (!picker) return;
+  folderPickerContext = [item, isFolder];
   picker.innerHTML = '';
   picker.classList.remove('show');
   const folders = getFolders();
@@ -3170,56 +3238,78 @@ function renderFolderPicker(item, isFolder) {
     blocked.add(item.id);
     descendants(item.id).forEach(id => blocked.add(id));
   }
-  const candidates = folders.filter(folder => !blocked.has(folder.id))
-    .sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id)));
-  if (!candidates.length) {
+  // Only the outermost folders are listed; deeper ones appear when their
+  // parent's caret is opened. Moving a folder into its own descendant is
+  // impossible, so those folders are dropped entirely (and so are their
+  // children, which can only sit deeper still).
+  const candidates = folders.filter(folder => !blocked.has(folder.id));
+  const roots = candidates.filter(folder => !folder.parentId)
+    .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+  if (!roots.length) {
     const empty = document.createElement('div');
+    empty.className = 'tree-empty';
     empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
     empty.textContent = tKey('empty-folders', 'No folders yet');
     picker.appendChild(empty);
     return;
   }
-  candidates.forEach(folder => {
-    const label = document.createElement('label');
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = isFolder ? item.parentId === folder.id : (item.folderIds || []).includes(folder.id);
-    checkbox.addEventListener('change', () => {
-      if (isFolder) {
-        const foldersNow = getFolders();
-        const current = foldersNow.find(entry => entry.id === item.id);
-        if (!current) return;
-        if (checkbox.checked) {
-          current.parentId = folder.id;
-          picker.querySelectorAll('input[type="checkbox"]').forEach(other => {
-            if (other !== checkbox) other.checked = false;
-          });
-        } else if (current.parentId === folder.id) {
-          current.parentId = null;
+  const renderLevel = (list, depth, parent) => {
+    list.forEach(folder => {
+      const children = candidates.filter(child => child.parentId === folder.id)
+        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+      const expanded = isFolderExpanded('picker', folder.id);
+      const row = document.createElement('div');
+      row.className = 'tree-row folder-tree-row';
+      row.dataset.folderId = folder.id;
+      row.style.paddingLeft = 10 + depth * 16 + 'px';
+      row.appendChild(createTreeToggle(children.length > 0, expanded, 'picker', folder.id));
+      const label = document.createElement('label');
+      label.className = 'tree-label';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = isFolder ? item.parentId === folder.id : (item.folderIds || []).includes(folder.id);
+      checkbox.addEventListener('change', () => {
+        if (isFolder) {
+          const foldersNow = getFolders();
+          const current = foldersNow.find(entry => entry.id === item.id);
+          if (!current) return;
+          if (checkbox.checked) {
+            current.parentId = folder.id;
+            picker.querySelectorAll('input[type="checkbox"]').forEach(other => {
+              if (other !== checkbox) other.checked = false;
+            });
+          } else if (current.parentId === folder.id) {
+            current.parentId = null;
+          }
+          current.updatedAt = Date.now();
+          saveFolders(foldersNow);
+          item.parentId = current.parentId;
+        } else {
+          const projects = getProjects();
+          const current = projects.find(entry => entry.id === item.id);
+          if (!current) return;
+          const ids = new Set(current.folderIds || []);
+          if (checkbox.checked) ids.add(folder.id); else ids.delete(folder.id);
+          current.folderIds = Array.from(ids);
+          current.updatedAt = Date.now();
+          saveProjects(projects);
+          item.folderIds = current.folderIds;
         }
-        current.updatedAt = Date.now();
-        saveFolders(foldersNow);
-        item.parentId = current.parentId;
-      } else {
-        const projects = getProjects();
-        const current = projects.find(entry => entry.id === item.id);
-        if (!current) return;
-        const ids = new Set(current.folderIds || []);
-        if (checkbox.checked) ids.add(folder.id); else ids.delete(folder.id);
-        current.folderIds = Array.from(ids);
-        current.updatedAt = Date.now();
-        saveProjects(projects);
-        item.folderIds = current.folderIds;
-      }
-      renderProjects();
-      updateHomeControls();
+        renderProjects();
+        updateHomeControls();
+      });
+      const text = document.createElement('span');
+      // Inside a branch the indent already says where it is; the full path
+      // would repeat "A / B" for every nested row.
+      text.textContent = (depth > 0 ? folder.title : folderPath(folder.id) || folder.title) || '';
+      label.appendChild(checkbox);
+      label.appendChild(text);
+      row.appendChild(label);
+      parent.appendChild(row);
+      if (children.length && expanded) renderLevel(children, depth + 1, parent);
     });
-    const text = document.createElement('span');
-    text.textContent = folderPath(folder.id) || folder.title;
-    label.appendChild(checkbox);
-    label.appendChild(text);
-    picker.appendChild(label);
-  });
+  };
+  renderLevel(roots, 0, picker);
 }
 
 function openFolderDrawer(folderId) {
@@ -3282,6 +3372,29 @@ function closeDrawer() {
   hideDrawerMenus();
 }
 
+// Toggles this drawer folder's membership on one draft. Other folders are left
+// alone (a draft can be in several), and the row is re-rendered by the caller.
+function toggleDraftInDrawerFolder(projectId, wantIn, list, mode) {
+  const folderId = Draft.drawerFolderId;
+  if (!folderId) return;
+  const all = getProjects();
+  const current = all.find(entry => entry.id === projectId);
+  if (!current) return;
+  const wasIn = (current.folderIds || []).includes(folderId);
+  const ids = new Set(current.folderIds || []);
+  if (wantIn) ids.add(folderId); else ids.delete(folderId);
+  if (ids.has(folderId) === wasIn) return;
+  current.folderIds = Array.from(ids);
+  current.updatedAt = Date.now();
+  saveProjects(all);
+  renderProjects();
+  // Only rows that actually changed hands are affected: keep the tree's
+  // expansion, drop the moved row, and swap it into the other mode's list.
+  const row = Array.from(list.querySelectorAll('label')).find(label => label.dataset.projectId === projectId);
+  if (row) row.remove();
+  renderManageDraftList(mode);
+}
+
 function renderManageDraftList(mode) {
   const folderId = Draft.drawerFolderId;
   if (!folderId) return;
@@ -3290,56 +3403,82 @@ function renderManageDraftList(mode) {
   if (!listWrap || !list) return;
   list.innerHTML = '';
   const projects = getProjects().slice().sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
-  // Add lists drafts that are not in *this* folder yet (a draft may live in
-  // several folders at once); Remove lists what is in this folder; blank mode
-  // is the unfiltered overview.
   const inFolder = project => (project.folderIds || []).includes(folderId);
-  let rows = projects;
-  if (mode === 'remove') rows = projects.filter(inFolder);
-  else if (mode === 'add') rows = projects.filter(project => !inFolder(project));
-  const appendEmpty = () => {
-    if (list.querySelector('.manage-list-empty')) return;
+  const appendEmpty = text => {
     const empty = document.createElement('div');
     empty.className = 'manage-list-empty';
     empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
-    empty.textContent = mode === 'add'
-      ? tKey('manage-add-empty', 'No drafts left to add')
-      : tKey('empty-projects', 'No drafts yet');
+    empty.textContent = text;
     list.appendChild(empty);
   };
-  if (!rows.length) {
-    appendEmpty();
-  } else {
-    rows.forEach(project => {
-      const label = document.createElement('label');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = mode === 'remove' ? true : inFolder(project);
-      checkbox.addEventListener('change', () => {
-        const all = getProjects();
-        const current = all.find(entry => entry.id === project.id);
-        if (!current) return;
-        const wasIn = (current.folderIds || []).includes(folderId);
-        const ids = new Set(current.folderIds || []);
-        // Only this folder's membership changes; other folders are untouched.
-        if (checkbox.checked) ids.add(folderId); else ids.delete(folderId);
-        const isIn = ids.has(folderId);
-        current.folderIds = Array.from(ids);
-        current.updatedAt = Date.now();
-        saveProjects(all);
-        renderProjects();
-        // The row no longer belongs to this list whichever way it was toggled.
-        if (wasIn !== isIn) {
-          label.remove();
-          if (!list.querySelector('label')) appendEmpty();
-        }
+
+  const foldersNow = getFolders();
+  if (mode === 'add') {
+    // Unattached drafts first, then the folder tree (outermost folders only;
+    // a caret reveals the folders AND drafts nested inside). Checking a nested
+    // draft files it into this folder from wherever it currently sits.
+    const loose = projects.filter(project => !isFiledInFolder(project));
+    loose.forEach(project => {
+      const row = createDraftRow(project, {
+        checked: false,
+        onToggle: (checkbox) => toggleDraftInDrawerFolder(project.id, checkbox.checked, list, 'add')
       });
-      const text = document.createElement('span');
-      text.textContent = project.title || tKey('placeholder-title', 'Untitled');
-      label.appendChild(checkbox);
-      label.appendChild(text);
-      list.appendChild(label);
+      row.dataset.projectId = project.id;
+      row.classList.add('loose-row');
+      list.appendChild(row);
     });
+    const renderLevel = (folders, depth, parent) => {
+      folders.forEach(folder => {
+        const childFolders = foldersNow.filter(child => child.parentId === folder.id)
+          .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+        // Only drafts that need moving *into* this folder are offered, and a
+        // nested one is always filed somewhere else already (loose drafts are
+        // listed at the top), so the marker is accurate.
+        const drafts = projects.filter(project => !inFolder(project) && isFiledInFolder(project));
+        const hasChildren = childFolders.length > 0 || drafts.length > 0;
+        const expanded = isFolderExpanded('manageAdd', folder.id);
+        const row = document.createElement('div');
+        row.className = 'tree-row folder-tree-row';
+        row.style.paddingLeft = 10 + depth * 16 + 'px';
+        row.appendChild(createTreeToggle(hasChildren, expanded, 'manageAdd', folder.id));
+        const name = document.createElement('span');
+        name.className = 'tree-folder-name';
+        name.textContent = folder.title || '';
+        row.appendChild(name);
+        parent.appendChild(row);
+        if (!expanded) return;
+        drafts.forEach(project => {
+          const draftRow = createDraftRow(project, {
+            checked: false,
+            availableIn: [tKey('already-in-folder', 'in another folder')],
+            onToggle: (checkbox) => toggleDraftInDrawerFolder(project.id, checkbox.checked, list, 'add')
+          });
+          draftRow.dataset.projectId = project.id;
+          draftRow.style.paddingLeft = 26 + (depth + 1) * 16 + 'px';
+          parent.appendChild(draftRow);
+        });
+        renderLevel(childFolders, depth + 1, parent);
+      });
+    };
+    const roots = foldersNow.filter(folder => !folder.parentId)
+      .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+    renderLevel(roots, 0, list);
+    if (!roots.length && !loose.length) appendEmpty(tKey('manage-add-empty', 'No drafts left to add'));
+  } else {
+    // Remove: everything currently in this folder, flat.
+    const rows = mode === 'remove' ? projects.filter(inFolder) : projects;
+    if (!rows.length) {
+      appendEmpty(tKey('empty-projects', 'No drafts yet'));
+    } else {
+      rows.forEach(project => {
+        const row = createDraftRow(project, {
+          checked: mode === 'remove' ? true : inFolder(project),
+          onToggle: (checkbox) => toggleDraftInDrawerFolder(project.id, checkbox.checked, list, mode)
+        });
+        row.dataset.projectId = project.id;
+        list.appendChild(row);
+      });
+    }
   }
   const manageOptions = document.getElementById('folderManageOptions');
   if (manageOptions) manageOptions.classList.remove('show');
