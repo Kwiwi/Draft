@@ -3290,13 +3290,15 @@ function renderManageDraftList(mode) {
   if (!listWrap || !list) return;
   list.innerHTML = '';
   const projects = getProjects().slice().sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
-  // Add only offers drafts that live nowhere (each draft belongs to one folder);
-  // Remove lists what is in this folder; blank mode is the unfiltered overview.
+  // Add lists drafts that are not in *this* folder yet (a draft may live in
+  // several folders at once); Remove lists what is in this folder; blank mode
+  // is the unfiltered overview.
   const inFolder = project => (project.folderIds || []).includes(folderId);
   let rows = projects;
   if (mode === 'remove') rows = projects.filter(inFolder);
-  else if (mode === 'add') rows = projects.filter(project => !isFiledInFolder(project));
+  else if (mode === 'add') rows = projects.filter(project => !inFolder(project));
   const appendEmpty = () => {
+    if (list.querySelector('.manage-list-empty')) return;
     const empty = document.createElement('div');
     empty.className = 'manage-list-empty';
     empty.style.cssText = 'padding:8px 10px;color:#999;font-size:12px;';
@@ -3312,20 +3314,15 @@ function renderManageDraftList(mode) {
       const label = document.createElement('label');
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
-      checkbox.checked = mode === 'remove' ? true : (project.folderIds || []).includes(folderId);
+      checkbox.checked = mode === 'remove' ? true : inFolder(project);
       checkbox.addEventListener('change', () => {
         const all = getProjects();
         const current = all.find(entry => entry.id === project.id);
         if (!current) return;
         const wasIn = (current.folderIds || []).includes(folderId);
         const ids = new Set(current.folderIds || []);
-        if (checkbox.checked) {
-          // One folder per draft: checking a new one moves it here.
-          ids.clear();
-          ids.add(folderId);
-        } else {
-          ids.delete(folderId);
-        }
+        // Only this folder's membership changes; other folders are untouched.
+        if (checkbox.checked) ids.add(folderId); else ids.delete(folderId);
         const isIn = ids.has(folderId);
         current.folderIds = Array.from(ids);
         current.updatedAt = Date.now();

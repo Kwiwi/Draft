@@ -240,39 +240,40 @@ getEl('folderManageOptions');
 Draft.drawerFolderId = FOLDER_A;
 api.renderManageDraftList('add');
 let titles = list.children.map(c => (c.children[1] ? c.children[1].textContent : ''));
-check('add list excludes drafts already in a folder', JSON.stringify(titles) === JSON.stringify(['Loose', 'Loose too']));
+// p3 already lives in Beta (and may stay there). A draft can be in several
+// folders, so Add only hides drafts that are *already in this folder*.
+check('add list excludes only drafts already in this folder',
+  JSON.stringify(titles) === JSON.stringify(['In Beta', 'Loose', 'Loose too']));
 
-// checking one files it here and removes the row
-const row = list.children[0];
+// checking one files it here, keeps its other folders, and drops the row
+const row = list.children.find(c => c.children[1].textContent === 'In Beta');
 const box = row.children[0];
 box.checked = true;
 box.dispatch('change');
-check('checking a draft files it into the folder',
-  JSON.parse(store['draft_projects']).find(p => p.id === 'p2').folderIds.join(',') === FOLDER_A);
+const beta = JSON.parse(store['draft_projects']).find(p => p.id === 'p3');
+check('checking a draft adds this folder', beta.folderIds.includes(FOLDER_A));
+check('checking a draft keeps its other folders', beta.folderIds.includes(FOLDER_B));
 check('checked row leaves the add list', !list.children.includes(row));
 
-// 6. Remove drafts only lists drafts in this folder, and unchecking drops the row.
+// 6. Remove drafts only lists drafts in this folder, and unchecking drops the row
+// (and only removes *this* folder).
 api.renderManageDraftList('remove');
 titles = list.children.map(c => (c.children[1] ? c.children[1].textContent : ''));
-check('remove list only shows folder drafts', JSON.stringify(titles) === JSON.stringify(['In Alpha', 'Loose']));
-const rmRow = list.children[0];
+check('remove list only shows drafts in this folder',
+  JSON.stringify(titles) === JSON.stringify(['In Alpha', 'In Beta']));
+const rmRow = list.children.find(c => c.children[1].textContent === 'In Beta');
 const rmBox = rmRow.children[0];
 rmBox.checked = false;
 rmBox.dispatch('change');
-check('unchecking removes from folder',
-  JSON.parse(store['draft_projects']).find(p => p.id === 'p1').folderIds.length === 0);
+const betaAfter = JSON.parse(store['draft_projects']).find(p => p.id === 'p3');
+check('unchecking removes only this folder',
+  !betaAfter.folderIds.includes(FOLDER_A) && betaAfter.folderIds.includes(FOLDER_B));
 check('unchecked row leaves the remove list', !list.children.includes(rmRow));
 
-// 6b. Switching modes after a list was toggled rebuilds it cleanly (no stale
-// placeholder left behind by the old markup or from the previous mode).
-// p1 was just unfiled, so the add list now offers both loose drafts.
+// 6b. Switching modes rebuilds the list cleanly.
 api.renderManageDraftList('add');
-check('add list shows the remaining unfiled drafts',
-  list.children.length === 2 &&
-  list.children.map(c => c.children[1].textContent).join('|') === 'In Alpha|Loose too');
-api.renderManageDraftList('remove');
-check('remove list rebuilds after switching modes',
-  list.children.length === 1 && list.children[0].children[1].textContent === 'Loose');
+check('add list rebuilds after switching modes',
+  list.children.map(c => c.children[1].textContent).join('|') === 'In Beta|Loose|Loose too');
 
 // 7. Folder picker ("Add to folder") still works for a draft.
 api.renderFolderPicker(JSON.parse(store['draft_projects']).find(p => p.id === 'p3'), false);

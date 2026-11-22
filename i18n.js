@@ -15,7 +15,7 @@ const translations = {
     'btn-manage': '管理',
     'manage-remove': '批量移出草稿',
     'manage-add': '批量加入草稿',
-    'manage-add-empty': '没有可加入的草稿（草稿都已在合集中）',
+    'manage-add-empty': '没有可加入的草稿（都已在合集中）',
     'folder-empty': '暂无合集',
     'folder-name-title': '命名合集',
     'folder-delete-warning': '删除合集？',
