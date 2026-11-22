@@ -203,7 +203,7 @@ const code = fs.readFileSync(path.join(ROOT, 'i18n.js'), 'utf8') + '\n;\n' +
 vm.createContext(sandbox);
 vm.runInContext(code, sandbox, { filename: 'app.js' });
 
-const api = vm.runInContext('({ Draft, goHome, openProject, showDraftHome, renderManageDraftList, renderFolderPicker, getFolders, isFolderExpanded, expandedTreeFolders })', sandbox);
+const api = vm.runInContext('({ Draft, goHome, openProject, showDraftHome, renderManageDraftList, renderFolderPicker, getFolders, isFolderExpanded, expandedTreeFolders, parseHexColor, hexInputText, hexToRgba, rtfColorValue, selectionCss })', sandbox);
 const Draft = api.Draft;
 
 // ---------- assertions ----------
@@ -332,6 +332,32 @@ check('picker branch is indented', picker.children[1].style.paddingLeft === '26p
 api.renderFolderPicker({ id: FOLDER_A, title: 'Alpha', parentId: null }, true);
 check('picker hides the folder itself (no self-parenting)',
   !pickerTitles().includes('Alpha'));
+
+// 8. Colour fields accept #RRGGBBAA (alpha last), while old values keep working.
+const color = v => api.parseHexColor(v);
+check('6-digit hex still parses as opaque',
+  color('1F7FFF').hex === '#1f7fff' && color('1F7FFF').alphaHex === 'ff' && color('1F7FFF').alpha === 1);
+check('8-digit hex splits rgb and alpha',
+  JSON.stringify(color('#1F7FFF80').rgb) === '[31,127,255]' && color('#1F7FFF80').alphaHex === '80');
+check('alpha 80 is about half transparent', Math.abs(color('#ff000080').alpha - 0.5019) < 0.001);
+check('3- and 4-digit shorthand expand', color('#fff').hex === '#ffffff' && color('#f008').alphaHex === '88');
+check('leading # is optional', color('1F7FFF80').hex === color('#1F7FFF80').hex);
+check('unfinished input is rejected (live typing stays quiet)',
+  ['', '1', '1F7FFF8', '1F7FZZ', 'GGGGGG', '1F7FFF80FF'].every(v => color(v) === null));
+// Each length is a complete colour in its own right, so a 4th digit snaps the
+// 3-digit value to its next valid form rather than being ignored.
+check('shorthand lengths are all valid', color('1F7').hex === '#11ff77' && color('1F7F').hex === '#11ff77ff');
+check('opaque input round-trips as 6 digits', api.hexInputText('#1F7FFF') === '1F7FFF');
+check('translucent input round-trips as 8 digits', api.hexInputText('#1f7fff80') === '1F7FFF80');
+check('rtf ignores the alpha', JSON.stringify(api.rtfColorValue('#1f7fff80')) === '[31,127,255]');
+check('rtf still reads the old 6-digit form', JSON.stringify(api.rtfColorValue('#1f7fff')) === '[31,127,255]');
+check('tool background keeps the rgb, not the alpha', api.hexToRgba('#1f7fff80', 0.3) === 'rgba(31,127,255,0.3)');
+
+// 9. Applying a selection colour stores 6 digits when opaque, 8 when translucent.
+sandbox.__apply = v => api.selectionCss(v);
+check('opaque selection colour stores #rrggbb', sandbox.__apply('#1F7FFF') === '#1f7fff');
+check('translucent selection colour stores #rrggbbaa', sandbox.__apply('1F7FFF80') === '#1f7fff80');
+check('a fully-opaque alpha collapses to 6 digits', sandbox.__apply('#1F7FFFFF') === '#1f7fff');
 
 console.log(failures ? 'NAVTEST_FAILED ' + failures : 'NAVTEST_OK');
 process.exitCode = failures ? 1 : 0;

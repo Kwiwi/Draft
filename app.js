@@ -357,11 +357,18 @@ function applySelectionStyle(styleName, value) {
   return true;
 }
 
+// The CSS colour a selection colour field stands for: #rrggbb when opaque,
+// #rrggbbaa when translucent. Split out so it can be tested without a DOM.
+function selectionCss(value) {
+  const color = parseHexColor(value);
+  if (!color) return null;
+  return color.hex.length === 9 && color.alphaHex !== 'ff' ? color.hex : color.hex.slice(0, 7);
+}
+
 function updateSelectionColor(value) {
-  let color = String(value || '').trim();
-  if (!color.startsWith('#')) color = '#' + color;
-  if (!/^#[0-9a-fA-F]{6}$/.test(color)) return false;
-  return applySelectionStyle('color', color);
+  const color = parseHexColor(value);
+  if (!color) return false;
+  return applySelectionStyle('color', selectionCss(value));
 }
 
 function handleEditorSelectionChange() {
@@ -598,22 +605,55 @@ function toggleToolPalette() {
   toolColorPanel.classList.remove('show');
 }
 
-function setToolColor(value, persist = true, syncInput = true) {
-  let color = String(value || '').trim();
-  if (!color.startsWith('#')) color = '#' + color;
-  if (/^#[0-9a-fA-F]{3}$/.test(color)) {
-    color = '#' + color.slice(1).split('').map(char => char + char).join('');
+// One hex parser for every colour field: #RGB, #RGBA, #RRGGBB and #RRGGBBAA
+// (alpha last, like every browser). Returns null when the text is not a colour
+// the user finished typing, so live "input" handlers can stay quiet midway
+// through "1F7F" instead of applying a wrong colour per keystroke.
+function parseHexColor(value) {
+  let hex = String(value || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]+$/.test(hex)) return null;
+  if (hex.length === 3 || hex.length === 4) {
+    hex = hex.split('').map(char => char + char).join('');
   }
-  if (!/^#[0-9a-fA-F]{6}$/.test(color)) return false;
-  const red = parseInt(color.slice(1, 3), 16);
-  const green = parseInt(color.slice(3, 5), 16);
-  const blue = parseInt(color.slice(5, 7), 16);
-  document.documentElement.style.setProperty('--tool-color', color);
-  document.documentElement.style.setProperty('--tool-color-bg', `rgba(${red},${green},${blue},.3)`);
+  if (hex.length !== 6 && hex.length !== 8) return null;
+  const alphaHex = hex.length === 8 ? hex.slice(6, 8) : 'ff';
+  const alpha = parseInt(alphaHex, 16) / 255;
+  return {
+    hex: '#' + hex.toLowerCase(),
+    rgb: [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)],
+    alpha,
+    alphaHex: alphaHex.toLowerCase()
+  };
+}
+
+// The text a colour input shows back: #RRGGBB, or #RRGGBBAA when translucent.
+function hexInputText(hex) {
+  const color = parseHexColor(hex);
+  if (!color) return '';
+  return color.hex.slice(1, color.alphaHex === 'ff' ? 7 : 9).toUpperCase();
+}
+
+function hexToRgba(hex, alpha) {
+  const color = parseHexColor(hex);
+  if (!color) return 'transparent';
+  return `rgba(${color.rgb.join(',')},${alpha})`;
+}
+
+function setToolColor(value, persist = true, syncInput = true) {
+  const color = parseHexColor(value);
+  if (!color) return false;
+  // An alpha-free hex means fully opaque (#RRGGBBAA), so a translucent tool
+  // colour can be dialled back to solid by deleting the last two digits.
+  const css = color.hex.length === 9 ? color.hex : color.hex.slice(0, 7);
+  // --tool-color also paints a 1px box-shadow ring while the button is dragged,
+  // and that defaults to the full colour, so it gets the (opaque) text colour.
+  document.documentElement.style.setProperty('--tool-color', css);
+  document.documentElement.style.setProperty('--tool-color-ring', hexToRgba(color.hex, 1));
+  document.documentElement.style.setProperty('--tool-color-bg', hexToRgba(color.hex, 0.3));
   const colorButton = document.querySelector('.tool-color-btn');
-  if (colorButton) colorButton.style.color = color;
-  if (persist) localStorage.setItem('tool-color-custom', color);
-  if (syncInput) document.getElementById('toolColorInput').value = color.slice(1);
+  if (colorButton) colorButton.style.color = css;
+  if (persist) localStorage.setItem('tool-color-custom', css);
+  if (syncInput) document.getElementById('toolColorInput').value = hexInputText(css);
   return true;
 }
 
@@ -1736,7 +1776,8 @@ function rtfText(text) {
 function rtfColorValue(value) {
   const match = String(value || '').match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
   if (match) return [Number(match[1]), Number(match[2]), Number(match[3])];
-  const hex = String(value || '').trim().match(/^#([0-9a-f]{6})$/i);
+  // #RRGGBB and #RRGGBBAA (the alpha is ignored: RTF cannot express it).
+  const hex = String(value || '').trim().match(/^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i);
   if (hex) return [
     parseInt(hex[1].slice(0, 2), 16),
     parseInt(hex[1].slice(2, 4), 16),
@@ -1772,6 +1813,8 @@ function projectRtf(project) {
     }
     return fontIndexes.get(key);
   };
+  // RTF has no alpha, so a translucent colour is exported as its plain RGB
+  // (the PDF/print path flattens transparency anyway).
   const getColorIndex = computed => {
     const rgb = rtfColorValue(computed.color);
     const key = rgb.join(',');
@@ -2403,13 +2446,26 @@ function showExportError(error) {
 }
 
 // Failure alert with a "retry" button (same markup as showExportError).
-function showExportRetryAlert(key) {
+// `detail` is shown under the message in small type: for the font failure it
+// carries the family name and the underlying error, so a report from a device
+// without adb already says which step broke.
+function showExportRetryAlert(key, detail) {
   const t = translations[currentLang] || translations['zh'];
   const text = document.getElementById('alertText');
   const modal = document.getElementById('alertModal');
   const okBtn = document.getElementById('alertOk');
   if (text && modal && okBtn) {
     text.textContent = t[key] || key;
+    if (detail) {
+      const reason = document.createElement('span');
+      reason.textContent = String(detail).slice(0, 300);
+      reason.style.display = 'block';
+      reason.style.marginTop = '6px';
+      reason.style.fontSize = '0.85em';
+      reason.style.opacity = '0.75';
+      reason.style.wordBreak = 'break-word';
+      text.appendChild(reason);
+    }
     modal.classList.add('show');
     okBtn.textContent = t['btn-retry'] || 'Retry';
     okBtn.onclick = () => {
@@ -2831,9 +2887,13 @@ async function exportPdf(project, options = {}) {
     if (unreadable.length && faceCount === 0) {
       console.warn('CJK font embed failed', unreadable);
       lastExportPayload = { pieces, filename };
-      showExportRetryAlert('export-embed-failed');
+      const detail = unreadable.map(item => item.family + ': ' + (item.detail || 'unknown')).join('\n');
+      showExportRetryAlert('export-embed-failed', detail);
       return;
     }
+    // One line per export in logcat: how many faces made it into the document.
+    console.info('export faces=' + faceCount, 'embedded=' + (lastExportFontReport.embedded || []).join('|'),
+      'tooBig=' + (lastExportFontReport.tooBig || []).map(item => item.family + '/' + item.reason).join('|'));
     // Offline PrintBridge writes a real PDF; browsers keep print + share the HTML.
     await printHtmlAsPdf(pieces, filename);
     // Be explicit about a font that was asked for but could not be embedded:
@@ -3697,7 +3757,8 @@ document.addEventListener('DOMContentLoaded', function() {
         toolColorPanel.style.left = toolPalette.style.left;
         toolColorPanel.style.top = (parseFloat(toolPalette.style.top) || 8) + 48 + 'px';
         const currentColor = localStorage.getItem('tool-color-custom') || (html.getAttribute('data-theme') === 'dark' ? '#0046BF' : '#1F7FFF');
-        toolColorInput.value = currentColor.replace('#', '');
+        // Show the alpha too, so the field always round-trips what is applied.
+        toolColorInput.value = hexInputText(currentColor) || currentColor.replace('#', '');
         toolColorPanel.classList.add('show');
       }
       if (action === 'settings') {
